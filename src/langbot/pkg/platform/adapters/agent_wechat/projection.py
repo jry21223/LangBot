@@ -206,6 +206,7 @@ def validate_change(
     change_kinds=frozenset({'created', 'baseline', 'recalled'}),
     hash_excluded_fields=frozenset({'projection_hash'}),
     verify_projection_hash=True,
+    allow_unverified_direction=False,
 ) -> None:
     """Validate the native saved contract before durable acceptance and source ACK."""
     required = {
@@ -259,7 +260,13 @@ def validate_change(
     for key in ('sender_id', 'server_id'):
         if saved[key] is not None:
             identity(saved[key])
-    if saved['direction'] != 'incoming' or saved['message_type'] not in {
+    direction_valid = saved['direction'] == 'incoming' or (
+        allow_unverified_direction
+        and saved['direction'] is None
+        and not saved['body_available']
+        and not change['original_available']
+    )
+    if not direction_valid or saved['message_type'] not in {
         'text',
         'image',
         'voice',

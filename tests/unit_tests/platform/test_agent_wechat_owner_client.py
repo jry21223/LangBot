@@ -256,3 +256,37 @@ async def test_global_generation_change_is_not_an_owner_version_or_fresh_read_ba
     assert current['original']['native_version'] != historical['items'][0]['native_version']
     assert page['items'][0]['native_version'] == 'wx-version'
     assert historical['items'][0]['native_version'] == 'wx-version'
+
+
+@pytest.mark.asyncio
+async def test_native_unknown_direction_and_known_recall_remain_facts_without_dispatch(owner_server):
+    client, page, _, _ = owner_server
+    item = page['items'][0]
+    item['change']['saved'].update(direction=None, sender_id=None, body_available=False)
+    item['change']['original_available'] = False
+    item['dispatch_eligible'] = False
+    item['qualification'] = 'direction_unverified'
+    result = await client.native_changes(cursor='owner-before')
+    assert result['items'][0]['change']['saved']['direction'] is None
+    item['change']['kind'] = 'recalled'
+    item['qualification'] = 'recalled'
+    assert (await client.native_changes(cursor='owner-before'))['items'][0]['change']['kind'] == 'recalled'
+    item['dispatch_eligible'] = True
+    with pytest.raises(OwnerProtocolError):
+        await client.native_changes(cursor='owner-before')
+
+
+@pytest.mark.asyncio
+async def test_actual_baseline_is_never_dispatched_and_unknown_snapshot_kind_is_not_added(owner_server):
+    client, page, _, _ = owner_server
+    item = page['items'][0]
+    item['change']['kind'] = 'baseline'
+    item['qualification'] = 'baseline'
+    item['dispatch_eligible'] = True
+    with pytest.raises(OwnerProtocolError):
+        await client.native_changes(cursor='owner-before')
+    item['dispatch_eligible'] = False
+    assert not (await client.native_changes(cursor='owner-before'))['items'][0]['dispatch_eligible']
+    item['change']['kind'] = 'baseline_snapshot'
+    with pytest.raises(OwnerProtocolError):
+        await client.native_changes(cursor='owner-before')

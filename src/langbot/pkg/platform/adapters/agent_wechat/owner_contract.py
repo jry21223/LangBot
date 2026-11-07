@@ -39,6 +39,7 @@ def _native_v1(change):
         reference_scheme='wechat-native',
         change_kinds=frozenset({'created', 'baseline', 'changed', 'attachments_changed', 'recalled'}),
         verify_projection_hash=False,
+        allow_unverified_direction=True,
     )
 
 
