@@ -12,7 +12,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: './node_modules/.bin/vite --host 127.0.0.1 --port 4173',
+    command: 'node src/app/home/bots/components/native-ingress/native-ingress.vite.mjs',
     cwd: process.cwd(),
     url: 'http://127.0.0.1:4173',
     reuseExistingServer: false,
