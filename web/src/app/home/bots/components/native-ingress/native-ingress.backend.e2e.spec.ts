@@ -49,11 +49,9 @@ for (const [adapter, width] of [
     );
     expect(descriptor.spec.native_ingress).toBe(true);
     await page.goto('/home/bots?id=new');
-    const option = page
-      .getByTestId('adapter-gallery')
-      .getByRole('button', {
-        name: new RegExp(escaped(descriptor.label.en_US)),
-      });
+    const option = page.getByTestId('adapter-gallery').getByRole('button', {
+      name: new RegExp(escaped(descriptor.label.en_US)),
+    });
     await expect(option).toBeVisible();
     await expect
       .poll(() =>
