@@ -1,5 +1,7 @@
+import { nativeIngressEn as nativeIngress } from './native-ingress';
 import pipelineMigration from './pipeline-migration/vi-VN';
 const viVN = {
+  nativeIngress,
   inflight: {
     autoCollapse: 'Tự thu gọn',
     empty: 'Không có sự kiện đang xử lý',

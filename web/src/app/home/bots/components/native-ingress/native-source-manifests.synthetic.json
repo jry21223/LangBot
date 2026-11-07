@@ -1,0 +1,216 @@
+{
+  "synthetic": true,
+  "manifests": [
+    {
+      "name": "wecom-archive",
+      "sha256": "81048e047cc6cac64563ddb1662b2e103bf72fb645da96e92cadcf5a259113f7",
+      "commit": "3b80a5016d635c11af3d779a5c4023af6cb20953"
+    },
+    {
+      "name": "agent-wechat",
+      "sha256": "8a13dda28fd3154f15fd97f616953933fe546204793f32deef45e8ab28a2c535",
+      "commit": "7af52c2e8bb6a67a5f91ca14c1029865109fa8a3"
+    }
+  ],
+  "adapters": [
+    {
+      "name": "wecom-archive",
+      "icon": "wecom.png",
+      "label": {
+        "en_US": "WeCom Archive (Read Only)",
+        "zh_Hans": "企业微信会话存档（只读）",
+        "zh_Hant": "企業微信會話存檔（唯讀）"
+      },
+      "description": {
+        "en_US": "Receive versioned archive metadata through an explicitly registered service client. Sending is unavailable.",
+        "zh_Hans": "通过明确登记的服务端客户端读取版本化存档元数据，不支持发送消息。",
+        "zh_Hant": "透過明確登記的服務端用戶端讀取版本化存檔中繼資料，不支援傳送訊息。"
+      },
+      "spec": {
+        "config": [
+          {
+            "name": "source",
+            "label": {
+              "en_US": "Source ID",
+              "zh_Hans": "来源标识",
+              "zh_Hant": "來源識別"
+            },
+            "type": "string",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "account",
+            "label": {
+              "en_US": "Owner Corporation ID",
+              "zh_Hans": "原件所属企业标识",
+              "zh_Hant": "原件所屬企業識別"
+            },
+            "type": "string",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "scope",
+            "label": {
+              "en_US": "Authorized Conversation Scope",
+              "zh_Hans": "已授权会话范围",
+              "zh_Hant": "已授權會話範圍"
+            },
+            "type": "string",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "grant_revision",
+            "label": {
+              "en_US": "Registered Grant Revision",
+              "zh_Hans": "已登记授权版本",
+              "zh_Hant": "已登記授權版本"
+            },
+            "type": "string",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "credential_ref",
+            "label": {
+              "en_US": "Service Credential Reference",
+              "zh_Hans": "服务端凭据引用",
+              "zh_Hant": "服務端憑據參照"
+            },
+            "description": {
+              "en_US": "An opaque reference to an approved service registration. Do not enter a credential or file path.",
+              "zh_Hans": "仅填写已批准的服务端登记引用，不填写密钥或文件路径。",
+              "zh_Hant": "僅填寫已批准的服務端登記參照，不填寫金鑰或檔案路徑。"
+            },
+            "type": "string",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "poll_interval",
+            "label": {
+              "en_US": "Poll Interval (seconds)",
+              "zh_Hans": "读取间隔（秒）",
+              "zh_Hant": "讀取間隔（秒）"
+            },
+            "type": "integer",
+            "required": false,
+            "default": 5
+          },
+          {
+            "name": "page_limit",
+            "label": {
+              "en_US": "Page Limit",
+              "zh_Hans": "单页数量",
+              "zh_Hant": "單頁數量"
+            },
+            "type": "integer",
+            "required": false,
+            "default": 100
+          }
+        ],
+        "supported_events": [
+          "message.received",
+          "message.edited",
+          "message.deleted"
+        ],
+        "supported_apis": {
+          "required": [],
+          "optional": []
+        },
+        "platform_specific_apis": [],
+        "native_ingress": true
+      }
+    },
+    {
+      "name": "agent-wechat",
+      "icon": "wechat.png",
+      "label": {
+        "en_US": "Personal WeChat",
+        "zh_Hans": "个人微信"
+      },
+      "description": {
+        "en_US": "Native Agent WeChat input using an existing account and approved scope.",
+        "zh_Hans": "复用现有账号与获准范围的原生个人微信入口。"
+      },
+      "spec": {
+        "legacy": false,
+        "config": [
+          {
+            "name": "source_flavor",
+            "label": {
+              "en_US": "Owner source contract",
+              "zh_Hans": "原来源版本合同"
+            },
+            "type": "string",
+            "required": true,
+            "default": "personal-wechat-native-v1"
+          },
+          {
+            "name": "credential_ref",
+            "label": {
+              "en_US": "Existing credential reference",
+              "zh_Hans": "现有凭据引用"
+            },
+            "type": "string",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "account_id",
+            "label": {
+              "en_US": "Existing account",
+              "zh_Hans": "现有账号"
+            },
+            "type": "string",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "allowed_threads",
+            "label": {
+              "en_US": "Approved conversation IDs",
+              "zh_Hans": "获准会话 ID"
+            },
+            "type": "array[string]",
+            "required": true,
+            "default": []
+          },
+          {
+            "name": "source_id",
+            "label": {
+              "en_US": "Registered source",
+              "zh_Hans": "已登记来源"
+            },
+            "type": "string",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "scope_id",
+            "label": {
+              "en_US": "Registered scope",
+              "zh_Hans": "已登记范围"
+            },
+            "type": "string",
+            "required": true,
+            "default": ""
+          },
+          {
+            "name": "initial_cursor",
+            "label": {
+              "en_US": "Initial consumer cursor",
+              "zh_Hans": "初始消费位置"
+            },
+            "type": "string",
+            "required": true,
+            "default": ""
+          }
+        ],
+        "native_ingress": true
+      }
+    }
+  ]
+}

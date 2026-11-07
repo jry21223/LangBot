@@ -103,7 +103,12 @@ class RuntimeBot:
         self.workspace_uuid = self.execution_context.workspace_uuid
         self.placement_generation = self.execution_context.placement_generation
         self.enable = bot_entity.enable
-        self.adapter = adapter
+        self.native_ingress_store = None
+        if callable(getattr(adapter, "native_source_binding", None)):
+            from .native_runtime import NativeAdapterGuard
+            self.adapter = NativeAdapterGuard(adapter)
+        else:
+            self.adapter = adapter
         self.task_wrapper = None
         self.task_context = taskmgr.TaskContext()
         self.task_wrapper = None
@@ -911,6 +916,8 @@ class RuntimeBot:
         event: platform_events.EBAEvent,
         adapter: abstract_platform_adapter.AbstractMessagePlatformAdapter,
     ) -> None:
+        if callable(getattr(self.adapter, "native_source_binding", None)):
+            raise PermissionError("native_ingress_only_no_parallel_pipeline")
         # One inbound event owns one execution trace; every stage recorded while
         # it is handled (routing, runner, platform API calls) joins that trace.
         from ..telemetry import trace as trace_mod
@@ -1706,6 +1713,12 @@ class RuntimeBot:
         )
 
     async def initialize(self):
+        if callable(getattr(self.adapter, "native_source_binding", None)):
+            if not self.enable:
+                return
+            from .native_runtime import attach_native_runtime
+            await attach_native_runtime(self)
+            return
         from ..telemetry.platform import observe_adapter
 
         observe_adapter(self.ap, self.execution_context, self.adapter)
@@ -2455,16 +2468,24 @@ class PlatformManager:
                     await bot.shutdown()
                 self._pop_runtime_bot(key)
 
+    def _adapter_info(self,component):
+        info=component.to_plain_dict()
+        adapter_type=self.adapter_dict.get(component.metadata.name)
+        if callable(getattr(adapter_type,'native_source_binding',None)):
+            info.setdefault('spec',{})['native_ingress']=True
+            info['spec']['native_capabilities']={'ingress_only':True,'can_send':False,'existing_router':True}
+        return info
+
     def get_available_adapters_info(self) -> list[dict]:
         return [
-            component.to_plain_dict() for component in self.adapter_components if component.metadata.name != 'websocket'
+            self._adapter_info(component) for component in self.adapter_components if component.metadata.name != 'websocket'
         ]
 
     def get_available_adapter_info_by_name(self, name: str) -> dict | None:
         name = canonical_adapter_name(name)
         for component in self.adapter_components:
             if component.metadata.name == name:
-                return component.to_plain_dict()
+                return self._adapter_info(component)
         return None
 
     def get_available_adapter_manifest_by_name(self, name: str) -> engine.Component | None:

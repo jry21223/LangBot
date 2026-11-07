@@ -7,7 +7,9 @@ on:
 jobs:
   build-dev-image:
     runs-on: ubuntu-latest
-    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    # Fork releases use their existing local publisher; never publish to the
+    # inherited upstream registry from a fork push or manual dispatch.
+    if: ${{ github.repository == 'langbot-app/LangBot' && !startsWith(github.ref, 'refs/tags/') }}
     permissions:
       contents: read
     steps:

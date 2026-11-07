@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from langbot.pkg.api.http.service.apikey import ApiKeyIdentity
 from langbot.pkg.api.mcp.context import get_request_context
 from langbot.pkg.api.mcp.mount import MCPMount
+from langbot.pkg.api.mcp.server import LangBotMCPServer
 from langbot.pkg.persistence.mgr import PersistenceManager, PersistenceMode
 from langbot.pkg.persistence.tenant_uow import PersistenceScopeKind
 
@@ -54,13 +55,25 @@ async def test_mcp_mount_keeps_request_context_but_no_session_during_stream_wait
         release_stream = asyncio.Event()
         observations: list[tuple[str, str, bool]] = []
 
-        async def fake_mcp_asgi(scope, receive, send):
-            del scope, receive
+        server = LangBotMCPServer(app)
+
+        @server.mcp.tool()
+        async def inspect_child_scope() -> str:
             context = get_request_context()
             assert manager.current_scope().kind is PersistenceScopeKind.WORKSPACE
             assert manager.current_session() is None
             await manager.execute_async(sa.select(table.c.id))
             assert manager.current_session() is None
+            return context.workspace_uuid
+
+        async def fake_mcp_asgi(scope, receive, send):
+            del scope, receive
+            context = get_request_context()
+            # The ASGI parent carries identity, not a task-owned DB scope.
+            assert manager.current_scope() is None
+            assert manager.current_session() is None
+            await asyncio.create_task(server.mcp.call_tool('inspect_child_scope', {}))
+            assert manager.current_scope() is None
             observations.append((context.request_id, context.workspace_uuid, manager.current_session() is None))
             stream_waiting.set()
             await release_stream.wait()
@@ -72,7 +85,8 @@ async def test_mcp_mount_keeps_request_context_but_no_session_during_stream_wait
                     manager.current_session() is None,
                 )
             )
-            await manager.execute_async(sa.select(table.c.id))
+            await asyncio.create_task(server.mcp.call_tool('inspect_child_scope', {}))
+            assert manager.current_scope() is None
             assert manager.current_session() is None
             await send({'type': 'http.response.start', 'status': 200, 'headers': []})
             await send({'type': 'http.response.body', 'body': b'{}'})

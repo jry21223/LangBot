@@ -1,6 +1,8 @@
+import { nativeIngressZhHans as nativeIngress } from './native-ingress';
 import slackSetup from './slack-setup/zh-Hans';
 import pipelineMigration from './pipeline-migration/zh-Hans';
 const zhHans = {
+  nativeIngress,
   slackSetup,
   inflight: {
     autoCollapse: '自动折叠',

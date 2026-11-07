@@ -24,6 +24,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..http.authz import Permission, require_permission
 from .context import get_request_context
+from .security import transport_security
 
 if typing.TYPE_CHECKING:
     from ...core import app as app_module
@@ -55,6 +56,22 @@ def _authorized(permission: Permission):
     return context
 
 
+class ScopedFastMCP(FastMCP):
+    """Open the Workspace scope in the actual child task executing a tool."""
+
+    def __init__(self,ap,**kwargs):
+        self._langbot_ap=ap
+        super().__init__(**kwargs)
+
+    async def call_tool(self,name,arguments):
+        context=get_request_context()
+        tenant_scope=getattr(self._langbot_ap.persistence_mgr,'tenant_scope',None)
+        if not callable(tenant_scope):
+            raise RuntimeError('MCP tool persistence scope is unavailable')
+        async with tenant_scope(context.workspace.workspace_uuid):
+            return await super().call_tool(name,arguments)
+
+
 class LangBotMCPServer:
     """Builds and owns the FastMCP instance for LangBot."""
 
@@ -63,11 +80,13 @@ class LangBotMCPServer:
         # Stateless HTTP so the server does not need sticky sessions behind a
         # load balancer; json_response keeps responses simple (no SSE stream
         # required for unary tool calls).
-        self.mcp = FastMCP(
+        self.mcp = ScopedFastMCP(
+            ap,
             name='LangBot',
             instructions=INSTRUCTIONS,
             stateless_http=True,
             json_response=True,
+            transport_security=transport_security(ap),
         )
         self._register_tools()
 
@@ -78,6 +97,8 @@ class LangBotMCPServer:
         ap = self.ap
         mcp = self
 
+        # Durable Router handoff is an internal single-consumer machine protocol.
+        # It deliberately uses the dedicated HTTP receiver ACL, not user MCP tools.
         # ----- System (read-only) -------------------------------------- #
         @mcp.tool(description='Get basic LangBot system/runtime information (version, edition).')
         async def get_system_info() -> str:

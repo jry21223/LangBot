@@ -325,6 +325,10 @@ class BotService:
         if bot is None:
             raise Exception('Bot not found')
 
+        from ....platform.native_ui import is_native_adapter
+        if is_native_adapter(self.ap,bot['adapter']):
+            raise ValueError('native_ingress_debug_unavailable')
+
         try:
             event = self._build_dry_run_event(event_type, event_data, context)
             bindings = (
@@ -618,6 +622,8 @@ class BotService:
         serialized = [self.ap.persistence_mgr.serialize_model(persistence_bot.Bot, bot, masked_columns) for bot in bots]
         for bot in serialized:
             bot['adapter'] = canonical_adapter_name(bot['adapter'])
+            if include_secret:
+                self._redact_invalid_native_configuration(bot)
         return serialized
 
     async def get_bot(self, context: TenantContext, bot_uuid: str, include_secret: bool = False) -> dict | None:
@@ -641,6 +647,8 @@ class BotService:
 
         serialized = self.ap.persistence_mgr.serialize_model(persistence_bot.Bot, bot, masked_columns)
         serialized['adapter'] = canonical_adapter_name(serialized['adapter'])
+        if include_secret:
+            self._redact_invalid_native_configuration(serialized)
         return serialized
 
     async def get_runtime_bot_info(
@@ -657,7 +665,9 @@ class BotService:
         adapter_runtime_values = {}
 
         runtime_bot = await self.ap.platform_mgr.get_bot_by_uuid(context, bot_uuid)
-        if runtime_bot is not None:
+        from ....platform.native_ui import is_native_adapter,native_ui_status
+        native=is_native_adapter(self.ap,persistence_bot['adapter'])
+        if runtime_bot is not None and not native:
             adapter_runtime_values['bot_account_id'] = runtime_bot.adapter.bot_account_id
 
         # Webhook URL for adapters that declare a generated webhook config item.
@@ -677,9 +687,54 @@ class BotService:
             adapter_runtime_values['webhook_full_url'] = None
             adapter_runtime_values['extra_webhook_full_url'] = None
 
+        if native:
+            adapter_runtime_values['native_ingress']=await native_ui_status(self.ap,context,persistence_bot,runtime_bot)
         persistence_bot['adapter_runtime_values'] = adapter_runtime_values
 
         return persistence_bot
+
+    def _validate_native_config_before_write(self,adapter_name,config,*,enable=None):
+        adapter_name=canonical_adapter_name(adapter_name)
+        registry=getattr(getattr(self.ap,'platform_mgr',None),'adapter_dict',{})
+        if not isinstance(registry,dict):
+            registry={}
+        adapter_type=registry.get(adapter_name)
+        native=callable(getattr(adapter_type,'native_source_binding',None))
+        if not native:
+            if adapter_name in {'agent-wechat','wecom-archive'}:
+                raise ValueError('native_adapter_not_available')
+            return
+        if enable is not None and type(enable) is not bool:
+            raise ValueError('native_enable_invalid')
+        if config=={} and enable is False:
+            return
+        validator=getattr(adapter_type,'native_validate_config',None)
+        if not callable(validator):
+            raise ValueError('native_config_validator_required')
+        # Pure validation happens before any INSERT/UPDATE, including disabled
+        # drafts. No source client, credential, runtime or network is resolved.
+        if not isinstance(config,dict):
+            raise ValueError('native_config_invalid')
+        validator(config)
+
+    def _reject_native_local_routing(self,adapter_name,data):
+        from ....platform.native_ui import is_native_adapter
+        if is_native_adapter(self.ap,canonical_adapter_name(adapter_name)):
+            if data.get('event_bindings') or data.get('plugin_processors'):
+                raise ValueError('native_ingress_routes_managed_externally')
+
+    def _redact_invalid_native_configuration(self,bot):
+        if bot.get('adapter') not in {'agent-wechat','wecom-archive'}:
+            return
+        if bot.get('enable') is False and bot.get('adapter_config')=={}:
+            bot['native_configuration_incomplete']=True
+        try:
+            self._validate_native_config_before_write(bot['adapter'],bot.get('adapter_config'),enable=bot.get('enable'))
+        except ValueError:
+            # Never echo old out-of-schema credentials, even to resource.manage.
+            # This is read-only redaction, not an implicit database cleanup.
+            bot['adapter_config']={}
+            bot['native_configuration_invalid']=True
 
     async def create_bot(self, context: TenantContext, bot_data: dict) -> str:
         """Create bot"""
@@ -694,6 +749,9 @@ class BotService:
 
         # TODO: 检查配置信息格式
         bot_data = await self._prepare_bot_data(context, bot_data, include_uuid=True)
+        self._validate_native_config_before_write(bot_data.get('adapter',''),bot_data.get('adapter_config'),
+                                                  enable=bot_data.get('enable',False))
+        self._reject_native_local_routing(bot_data.get('adapter',''),bot_data)
         bot_data['uuid'] = str(uuid.uuid4())
         bot_data['workspace_uuid'] = workspace_uuid
         bot_data.setdefault('event_bindings', [])
@@ -716,16 +774,72 @@ class BotService:
         workspace_uuid = require_workspace_uuid(context)
         update_data = await self._prepare_bot_data(context, bot_data, include_uuid=False)
         update_data.pop('workspace_uuid', None)
+        existing=await self.get_bot(context,bot_uuid,include_secret=True)
+        if existing is None:
+            raise WorkspaceNotFoundError('Bot not found')
+        if existing.get('native_configuration_invalid') and 'adapter_config' not in update_data:
+            raise ValueError('native_configuration_invalid')
+        # Bot update fields merge with the persistent entity. adapter_config,
+        # when supplied, is an explicit complete replacement as in the existing
+        # API; silently merging old secret keys would make them unremovable.
+        target_adapter=update_data.get('adapter',existing.get('adapter',''))
+        target_config=update_data.get('adapter_config',existing.get('adapter_config'))
+        if canonical_adapter_name(target_adapter)!=canonical_adapter_name(existing.get('adapter','')):
+            registry=getattr(getattr(self.ap,'platform_mgr',None),'adapter_dict',{})
+            target_type=registry.get(canonical_adapter_name(target_adapter)) if isinstance(registry,dict) else None
+            previous_type=registry.get(existing.get('adapter')) if isinstance(registry,dict) else None
+            native_switch=(existing.get('adapter') in {'agent-wechat','wecom-archive'}
+                or canonical_adapter_name(target_adapter) in {'agent-wechat','wecom-archive'}
+                or callable(getattr(target_type,'native_source_binding',None))
+                or callable(getattr(previous_type,'native_source_binding',None)))
+            if 'adapter_config' not in update_data and native_switch:
+                raise ValueError('native_adapter_switch_requires_explicit_config')
+        self._validate_native_config_before_write(target_adapter,target_config,enable=update_data.get('enable',existing.get('enable')))
+        self._reject_native_local_routing(target_adapter,update_data)
 
+        observed_adapter=existing.get('adapter','')
+        aliases={observed_adapter}
+        # Canonicalization does not hide which permission class was validated.
+        # Retain only the existing built-in aliases of the same exact adapter.
+        from ....platform.adapter_names import OMNI_ADAPTER_NAMES
+        if observed_adapter.endswith('-omni') and observed_adapter[:-5] in OMNI_ADAPTER_NAMES:
+            aliases.add(observed_adapter[:-5]+'-eba')
+        if observed_adapter=='onebot-v11':
+            aliases.update({'aiocqhttp-omni','aiocqhttp-eba'})
+        conditions=[persistence_bot.Bot.uuid==bot_uuid,persistence_bot.Bot.adapter.in_(aliases)]
+        registry=getattr(getattr(self.ap,'platform_mgr',None),'adapter_dict',{})
+        target_type=registry.get(canonical_adapter_name(target_adapter)) if isinstance(registry,dict) else None
+        previous_type=registry.get(canonical_adapter_name(observed_adapter)) if isinstance(registry,dict) else None
+        native_update=(callable(getattr(target_type,'native_source_binding',None))
+                       or callable(getattr(previous_type,'native_source_binding',None)))
+        if native_update:
+            if type(existing.get('enable')) is bool:
+                conditions.append(persistence_bot.Bot.enable==existing['enable'])
+            # Validate and CAS the same database config snapshot. A disabled
+            # writer can change it without changing adapter/enable. Read DB-native
+            # JSON text (also works for PostgreSQL JSON, which has no '=' op).
+            raw_query=scope_statement(sqlalchemy.select(
+                sqlalchemy.cast(persistence_bot.Bot.adapter_config,sqlalchemy.Text)).where(
+                    persistence_bot.Bot.uuid==bot_uuid),persistence_bot.Bot,workspace_uuid)
+            raw_result=await self.ap.persistence_mgr.execute_async(raw_query)
+            raw_config=raw_result.scalar_one_or_none()
+            import json
+            if raw_config is None:
+                raise ValueError('bot_configuration_changed_retry')
+            # Old invalid native config is intentionally redacted by get_bot.
+            # Its explicit complete replacement was independently validated above.
+            if not existing.get('native_configuration_invalid') and json.loads(raw_config)!=existing.get('adapter_config'):
+                raise ValueError('bot_configuration_changed_retry')
+            conditions.append(sqlalchemy.cast(persistence_bot.Bot.adapter_config,sqlalchemy.Text)==raw_config)
         result = await self.ap.persistence_mgr.execute_async(
             scope_statement(
-                sqlalchemy.update(persistence_bot.Bot).values(update_data).where(persistence_bot.Bot.uuid == bot_uuid),
+                sqlalchemy.update(persistence_bot.Bot).values(update_data).where(*conditions),
                 persistence_bot.Bot,
                 workspace_uuid,
             )
         )
         if getattr(result, 'rowcount', None) == 0:
-            raise WorkspaceNotFoundError('Bot not found')
+            raise ValueError('bot_configuration_changed_retry')
 
         runtime_fields = {'adapter', 'adapter_config', 'enable', 'event_bindings', 'plugin_processors'}
         if not runtime_fields.intersection(update_data):
@@ -769,19 +883,38 @@ class BotService:
             raise WorkspaceNotFoundError('Bot not found')
         await self.ap.platform_mgr.remove_bot(context, bot_uuid)
 
+    async def _authorize_native_log_view(self,context,bot,runtime):
+        from ....platform.native_ui import is_native_adapter
+        if not is_native_adapter(self.ap,bot.get('adapter','')):
+            return
+        from ....platform.native_contract import NativeAccessDenied
+        from ....platform.native_access import authorize_ui_observer
+        if (runtime is None or getattr(runtime,'workspace_uuid',None)!=context.workspace_uuid
+                or getattr(runtime,'native_ingress_store',None) is None
+                or not callable(getattr(runtime,'native_source_authorize',None))):
+            raise NativeAccessDenied('native_source_observer_unavailable')
+        binding=runtime.native_ingress_store.binding
+        await authorize_ui_observer(self.ap,context,bot['uuid'],binding)
+        await runtime.native_source_authorize()
+        await authorize_ui_observer(self.ap,context,bot['uuid'],binding)
+
     async def list_event_logs(
         self, context: TenantContext, bot_uuid: str, from_index: int, max_count: int
     ) -> tuple[list[dict], int]:
-        if await self.get_bot(context, bot_uuid, include_secret=False) is None:
+        bot=await self.get_bot(context, bot_uuid, include_secret=False)
+        if bot is None:
             raise WorkspaceNotFoundError('Bot not found')
         runtime_bot = await self.ap.platform_mgr.get_bot_by_uuid(context, bot_uuid)
+        await self._authorize_native_log_view(context,bot,runtime_bot)
         if runtime_bot is None:
-            # Saved but disabled/unconfigured bots have no runtime logs yet.
+            # Saved ordinary disabled bots have no runtime logs yet.
             return [], 0
 
         logs, total_count = await runtime_bot.logger.get_logs(from_index, max_count)
 
-        return [log.to_json() for log in logs], total_count
+        serialized=[log.to_json() for log in logs]
+        await self._authorize_native_log_view(context,bot,runtime_bot)
+        return serialized, total_count
 
     async def list_event_route_statuses(self, context: TenantContext, bot_uuid: str) -> dict[str, typing.Any]:
         """Return recent runtime status for Bot event routes from in-memory Bot logs."""
@@ -791,6 +924,8 @@ class BotService:
         if bot is None:
             raise WorkspaceNotFoundError('Bot not found')
         runtime_bot = await self.ap.platform_mgr.get_bot_by_uuid(context, bot_uuid)
+
+        await self._authorize_native_log_view(context,bot,runtime_bot)
 
         latest_by_binding: dict[str, dict[str, typing.Any]] = {}
         unmatched_events: list[dict[str, typing.Any]] = []
@@ -847,6 +982,7 @@ class BotService:
             if binding_id not in current_binding_ids
         ]
 
+        await self._authorize_native_log_view(context,bot,runtime_bot)
         return {
             'routes': routes,
             'unmatched_events': unmatched_events[-10:],

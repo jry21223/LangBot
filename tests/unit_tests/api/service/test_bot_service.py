@@ -616,6 +616,8 @@ class TestBotServiceUpdateBot:
         )
 
         service = BotService(ap)
+        # Native writes must inspect the persistent adapter before mutation.
+        service.get_bot = AsyncMock(return_value={'uuid':'test-uuid','adapter':'telegram','adapter_config':{}})
         await service.update_bot(
             WORKSPACE_UUID,
             'test-uuid',

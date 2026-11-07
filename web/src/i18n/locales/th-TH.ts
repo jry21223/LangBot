@@ -1,5 +1,7 @@
+import { nativeIngressEn as nativeIngress } from './native-ingress';
 import pipelineMigration from './pipeline-migration/th-TH';
 const thTH = {
+  nativeIngress,
   inflight: {
     autoCollapse: 'ยุบอัตโนมัติ',
     empty: 'ไม่มีเหตุการณ์ที่กำลังประมวลผล',

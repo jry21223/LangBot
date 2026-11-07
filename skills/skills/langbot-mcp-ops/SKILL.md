@@ -226,3 +226,20 @@ are not rewritten. Embedding and rerank models are not eligible.
 ### Reset a bot session context
 
 Use `reset_session_context(bot_id, session_id)` only when a user asks to start a session afresh. It requires `resource.manage`, preserves monitoring records, and refuses sessions with active tasks. It clears conversation runner state and excludes earlier transcript entries from subsequent model context. Files and long-term memory are not removed.
+
+## Native source handoff
+
+Router page consumption, acknowledgement, and receipt lookup use only the
+internal `/api/v1/native-ingress/<bot_uuid>/router/` HTTP protocol. They are not
+agent-accessible operations and are not exposed as MCP tools. This preserves one
+registered machine consumer instead of adding another user-facing dispatch path.
+Existing agent-accessible HTTP capabilities keep their ordinary MCP parity.
+
+The existing Host commits candidates and coverage before acknowledgement;
+producer acceptance is not business execution success. Do not start a second
+consumer or route native ingress through the ordinary model pipeline.
+
+Source authority and descriptor reads stay in the existing owning source reader
+and the native adapters' internal metadata protocol. LangBot does not expose a
+second public original-reader HTTP/MCP facade; original text/media permissions
+remain independent of the metadata ingestion service.

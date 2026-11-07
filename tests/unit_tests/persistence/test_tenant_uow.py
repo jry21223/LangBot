@@ -1198,3 +1198,12 @@ async def test_after_commit_task_is_cancelled_and_coroutine_closed_on_rollback(t
         assert coro.cr_frame is None
     finally:
         await engine.dispose()
+
+
+async def test_native_bot_config_cas_cast_does_not_open_arbitrary_casts() -> None:
+    from langbot.pkg.entity.persistence.bot import Bot
+
+    _validate_scoped_statement_call((sa.select(sa.cast(Bot.adapter_config, sa.Text)),), {})
+    for column in (Bot.event_bindings, Bot.plugin_processors, Bot.enable, sa.literal('{}')):
+        with pytest.raises(ScopedSessionTransactionError, match='casts'):
+            _validate_scoped_statement_call((sa.select(sa.cast(column, sa.Text)),), {})
