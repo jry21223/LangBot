@@ -41,7 +41,7 @@ class SavedSourceHandler(BaseHTTPRequestHandler):
                 'previous_cursor': query.get('cursor', [None])[0],
                 'next_cursor': 'page-v1',
                 'coverage': 'success_zero',
-                'gaps': ['history_before_feed_unverified'],
+                'gaps': [],
                 'items': [],
             }
             body.update(getattr(self.server, 'page_overrides', {}))

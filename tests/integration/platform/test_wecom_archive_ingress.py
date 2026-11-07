@@ -195,3 +195,50 @@ async def test_native_connection_facts_do_not_invent_account_proof():
             'workspace': 'workspace-a',
         }
         assert 'account' not in facts
+
+
+@pytest.mark.asyncio
+async def test_owner_gap_cannot_advance_persistent_watermark(manager):
+    from langbot.pkg.platform.adapters.wecom_archive.reader import SourceUnavailable
+
+    with archive_adapter() as (server, adapter):
+        server.page_overrides['gaps'] = ['history_before_feed_unverified']
+        store = NativeIngressStore(
+            manager, workspace_uuid='workspace-a', bot_uuid='bot-workspace-a', binding=adapter.native_source_binding()
+        )
+        await store.initialize()
+
+        async def authorized():
+            await adapter.authorize_native_source('workspace-a')
+
+        adapter.attach_native_ingress(store, authorized)
+        with pytest.raises(SourceUnavailable):
+            await adapter.poll_once()
+        assert await store.checkpoint() is None
+        assert (await store.accepted_events(authorize=authorized))['items'] == []
+
+
+@pytest.mark.asyncio
+async def test_persisted_admission_rejects_poisoned_saved_metadata(manager):
+    from langbot.pkg.platform.adapters.wecom_archive.projection import project_page
+    from langbot.pkg.platform.adapters.wecom_archive.reader import SourceUnavailable
+
+    with archive_adapter() as (_, adapter):
+        store = NativeIngressStore(
+            manager,
+            workspace_uuid='workspace-a',
+            bot_uuid='bot-workspace-a',
+            binding=adapter.native_source_binding(),
+            change_validator=adapter.native_validate_change,
+        )
+        await store.initialize()
+
+        async def authorized():
+            await adapter.authorize_native_source('workspace-a')
+
+        page = project_page(archived_page(), adapter.native_source_binding())
+        page.events[0].payload['change']['saved']['message']['summary'] = 'unapproved original'
+        with pytest.raises(SourceUnavailable):
+            await store.accept_page(page, authorize=authorized)
+        assert await store.checkpoint() is None
+        assert (await store.accepted_events(authorize=authorized))['items'] == []

@@ -188,3 +188,13 @@ def test_image_voice_and_file_versions_preserve_refs_without_body_or_host_path()
         assert event.payload['change']['saved']['attachments'][0]['type'] == media_type
         assert '/private/owner/original' not in json.dumps(event.payload)
         assert 'PRIVATE ORIGINAL' not in json.dumps(event.payload)
+
+
+def test_unsupported_owner_gap_is_rejected_instead_of_reported_as_complete():
+    import pytest
+    from langbot.pkg.platform.adapters.wecom_archive.reader import SourceUnavailable
+
+    page = archived_page()
+    page['gaps'] = ['history_before_feed_unverified']
+    with pytest.raises(SourceUnavailable):
+        project_page(page, SourceBinding('fixture-wecom', 'fixture-corp', 'fixture-chat', 'grant-v1'))
