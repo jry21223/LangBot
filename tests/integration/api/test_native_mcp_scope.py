@@ -94,5 +94,5 @@ async def test_native_machine_handoff_is_not_exposed_as_user_mcp_tools():
     server, _ = server_fixture()
     names = {tool.name for tool in await server.mcp.list_tools()}
     assert not names & {'read_native_router_page', 'ack_native_router_page', 'lookup_native_router_receipt'}
-    assert 'read_native_source_original' in names
+    assert 'read_native_source_original' not in names
     assert 'get_system_info' in names
