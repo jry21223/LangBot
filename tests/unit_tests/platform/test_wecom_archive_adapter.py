@@ -108,3 +108,8 @@ def test_pure_pre_persistence_validation_rejects_service_fields_and_invalid_bind
     ]:
         with pytest.raises(ValueError):
             WecomArchiveAdapter.native_validate_config(source_config() | {field: value})
+
+
+def test_runtime_health_is_unknown_before_any_real_source_evidence():
+    adapter = WecomArchiveAdapter(source_config(), FixtureLogger())
+    assert adapter.native_runtime_state() == {'state': 'unknown'}
