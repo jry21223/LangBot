@@ -101,3 +101,21 @@ pytest-asyncio's previous-loop probe; its later collection produced resource
 warnings during an unrelated migration test. This bootstrap prevents that
 allocation. It does not close provider-owned loops or suppress resource warnings,
 and leaves all test assertions and warning-as-error settings intact.
+
+### Existing MCP overlay option
+
+The first deployment can retain the existing read-only MCP `server.py` and
+`mount.py` overlay bytes after checking their exact deployment-manifest hashes.
+A private isolated combination against this Fork verified the original four
+Host/Origin/DNS/context/task-scope contracts, the exact existing 21-tool catalog,
+real current BotService read/write and refusal behavior, and passthrough of the
+new native HTTP paths. The existing overlay exposes 21 tools, not the upstream
+baseline's 50; preserving it keeps that existing surface rather than opening the
+additional upstream tools. No new native machine tool needs to be uncovered.
+
+This option avoids migrating `api.mcp_transport_security` settings for this
+release. Do not regenerate an old patch by changing an expected source hash.
+Retain the actual original bytes and read-only mounts, and recheck them against
+the exact release candidate. Private approved hosts and origins stay in the
+private deployment manifest, never this repository. This compatibility result is
+not permission to change the live overlay or its access policy.
