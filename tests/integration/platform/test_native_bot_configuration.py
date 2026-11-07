@@ -73,3 +73,47 @@ async def test_old_native_secret_is_redacted_on_read_and_requires_explicit_clean
         await bot_service.update_bot(context(),'bot-workspace-a',{'adapter_config':config()})
         clean=await bot_service.get_bot(context(),'bot-workspace-a',include_secret=True)
         assert clean['adapter_config']==config() and 'native_configuration_invalid' not in clean
+
+
+@pytest.mark.asyncio
+async def test_concurrent_adapter_change_cannot_bypass_native_config_validation(manager):
+    import asyncio
+    bot_service=service(manager)
+    stale_read=asyncio.Event()
+    continue_stale=asyncio.Event()
+    original_get=bot_service.get_bot
+    async def paused_get(context,bot_uuid,include_secret=False):
+        value=await original_get(context,bot_uuid,include_secret=include_secret)
+        if asyncio.current_task().get_name()=='stale-config-writer' and not stale_read.is_set():
+            stale_read.set()
+            await continue_stale.wait()
+        return value
+    bot_service.get_bot=paused_get
+    async def stale_update():
+        async with manager.tenant_scope('workspace-a'):
+            await bot_service.update_bot(context(),'bot-workspace-a',{'adapter_config':{'source_token':'synthetic-rejected-value'}})
+    task=asyncio.create_task(stale_update(),name='stale-config-writer')
+    await stale_read.wait()
+    async with manager.tenant_scope('workspace-a'):
+        await bot_service.update_bot(context(),'bot-workspace-a',{'adapter':'wecom-archive','adapter_config':config()})
+    continue_stale.set()
+    with pytest.raises(ValueError,match='configuration_changed_retry'):
+        await task
+    async with manager.tenant_uow('workspace-a') as uow:
+        row=await uow.session.get(Bot,'bot-workspace-a')
+        assert row.adapter=='wecom-archive' and row.adapter_config==config()
+
+
+@pytest.mark.asyncio
+async def test_switch_into_native_always_requires_explicit_validated_complete_config(manager):
+    bot_service=service(manager)
+    # Even a currently clean legacy config cannot be borrowed for a later
+    # adapter-only switch: another legacy writer may edit it concurrently.
+    async with manager.tenant_uow('workspace-a') as uow:
+        await uow.session.execute(sa.update(Bot).where(Bot.uuid=='bot-workspace-a').values(adapter_config=config()))
+    async with manager.tenant_scope('workspace-a'):
+        with pytest.raises(ValueError,match='explicit_config'):
+            await bot_service.update_bot(context(),'bot-workspace-a',{'adapter':'wecom-archive'})
+    async with manager.tenant_uow('workspace-a') as uow:
+        row=await uow.session.get(Bot,'bot-workspace-a')
+        assert row.adapter=='test' and row.adapter_config==config()

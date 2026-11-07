@@ -761,19 +761,36 @@ class BotService:
         target_adapter=update_data.get('adapter',existing.get('adapter',''))
         target_config=update_data.get('adapter_config',existing.get('adapter_config'))
         if canonical_adapter_name(target_adapter)!=canonical_adapter_name(existing.get('adapter','')):
-            if ('adapter_config' not in update_data and existing.get('adapter') in {'agent-wechat','wecom-archive'}):
+            registry=getattr(getattr(self.ap,'platform_mgr',None),'adapter_dict',{})
+            target_type=registry.get(canonical_adapter_name(target_adapter)) if isinstance(registry,dict) else None
+            previous_type=registry.get(existing.get('adapter')) if isinstance(registry,dict) else None
+            native_switch=(existing.get('adapter') in {'agent-wechat','wecom-archive'}
+                or canonical_adapter_name(target_adapter) in {'agent-wechat','wecom-archive'}
+                or callable(getattr(target_type,'native_source_binding',None))
+                or callable(getattr(previous_type,'native_source_binding',None)))
+            if 'adapter_config' not in update_data and native_switch:
                 raise ValueError('native_adapter_switch_requires_explicit_config')
         self._validate_native_config_before_write(target_adapter,target_config)
 
+        observed_adapter=existing.get('adapter','')
+        aliases={observed_adapter}
+        # Canonicalization does not hide which permission class was validated.
+        # Retain only the existing built-in aliases of the same exact adapter.
+        from ....platform.adapter_names import OMNI_ADAPTER_NAMES
+        if observed_adapter.endswith('-omni') and observed_adapter[:-5] in OMNI_ADAPTER_NAMES:
+            aliases.add(observed_adapter[:-5]+'-eba')
+        if observed_adapter=='onebot-v11':
+            aliases.update({'aiocqhttp-omni','aiocqhttp-eba'})
         result = await self.ap.persistence_mgr.execute_async(
             scope_statement(
-                sqlalchemy.update(persistence_bot.Bot).values(update_data).where(persistence_bot.Bot.uuid == bot_uuid),
+                sqlalchemy.update(persistence_bot.Bot).values(update_data).where(
+                    persistence_bot.Bot.uuid == bot_uuid,persistence_bot.Bot.adapter.in_(aliases)),
                 persistence_bot.Bot,
                 workspace_uuid,
             )
         )
         if getattr(result, 'rowcount', None) == 0:
-            raise WorkspaceNotFoundError('Bot not found')
+            raise ValueError('bot_configuration_changed_retry')
 
         runtime_fields = {'adapter', 'adapter_config', 'enable', 'event_bindings', 'plugin_processors'}
         if not runtime_fields.intersection(update_data):
