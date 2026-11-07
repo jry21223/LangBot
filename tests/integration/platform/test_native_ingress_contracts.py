@@ -626,10 +626,54 @@ async def test_migration_rejects_same_columns_without_required_constraints(tmp_p
             await conn.run_sync(lambda c: Base.metadata.create_all(c,tables=[User.__table__,Workspace.__table__,Bot.__table__]))
             await conn.exec_driver_sql('''CREATE TABLE native_ingress_sources (
                 id VARCHAR(64) PRIMARY KEY NOT NULL,workspace_uuid VARCHAR(36) NOT NULL,bot_uuid VARCHAR(255) NOT NULL,
-                binding JSON NOT NULL,binding_sha256 VARCHAR(64) NOT NULL,cursor TEXT,
+                binding JSON NOT NULL,binding_sha256 VARCHAR(64) NOT NULL,cursor TEXT,last_source_sequence BIGINT,
                 position INTEGER NOT NULL DEFAULT 0,router_cursor INTEGER NOT NULL DEFAULT 0,router_pending_page VARCHAR(64))''')
         await run_alembic_stamp(engine,'0037_metadata_text')
         with pytest.raises(RuntimeError,match='exact type, nullability'):
             await run_alembic_upgrade(engine)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_rejects_unapproved_cascade_on_otherwise_matching_native_source(tmp_path):
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from langbot.pkg.persistence.alembic_runner import run_alembic_stamp,run_alembic_upgrade
+    engine=create_async_engine('sqlite+aiosqlite:///'+str(tmp_path/'cascade.db'))
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda c: Base.metadata.create_all(c,tables=[User.__table__,Workspace.__table__,Bot.__table__]))
+            await conn.exec_driver_sql('''CREATE TABLE native_ingress_sources (
+                id VARCHAR(64) PRIMARY KEY NOT NULL,workspace_uuid VARCHAR(36) NOT NULL,bot_uuid VARCHAR(255) NOT NULL,
+                binding JSON NOT NULL,binding_sha256 VARCHAR(64) NOT NULL,cursor TEXT,last_source_sequence BIGINT,
+                position INTEGER NOT NULL DEFAULT 0,router_cursor INTEGER NOT NULL DEFAULT 0,router_pending_page VARCHAR(64),
+                UNIQUE(workspace_uuid,id),UNIQUE(workspace_uuid,bot_uuid),
+                FOREIGN KEY(workspace_uuid) REFERENCES workspaces(uuid) ON DELETE CASCADE,
+                FOREIGN KEY(workspace_uuid,bot_uuid) REFERENCES bots(workspace_uuid,uuid))''')
+        await run_alembic_stamp(engine,'0037_metadata_text')
+        with pytest.raises(RuntimeError,match='exact type, nullability'):
+            await run_alembic_upgrade(engine)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_typed_owner_unresolved_preserves_event_sequence_without_fake_message_reference(manager):
+    from langbot.pkg.platform.native_contract import SourceUnresolved
+    from langbot.pkg.entity.persistence.native_ingress import NativeGap
+    ingress=store(manager)
+    await ingress.initialize('owner-before')
+    unresolved=SourceUnresolved('owner-event-9',9,'wx-raw-3','test-source','chat-a')
+    await ingress.accept_page(SourcePage('owner-before','owner-after',(),unresolved=(unresolved,)),authorize=allowed)
+    assert await ingress.source_sequence_checkpoint()==9
+    page=await ingress.read_router_page(None,authorize=allowed)
+    assert page['items']==[] and page['gaps']==[dict(event_id=_hash([ingress.source_id,'native-unresolved','owner-event-9']),
+        reason='native_unresolved',source='test-source',scope='chat-a')]
+    await ingress.ack_router_page(page['page_id'],page['page_sha256'],[],authorize=allowed)
+    restarted=store(manager)
+    assert await restarted.checkpoint()=='owner-after'
+    assert await restarted.source_sequence_checkpoint()==9
+    async with manager.tenant_uow('workspace-a') as uow:
+        row=(await uow.session.execute(sa.select(NativeGap))).scalar_one()
+        assert row.owner_event_id=='owner-event-9' and row.source_sequence==9 and row.upstream_cursor=='wx-raw-3'
+        assert not hasattr(row,'record') and not hasattr(row,'reference')

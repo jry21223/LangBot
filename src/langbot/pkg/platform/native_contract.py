@@ -32,12 +32,23 @@ class SourceEnvelope:
 
 
 @dataclass(frozen=True)
+class SourceUnresolved:
+    event_id: str
+    source_sequence: int
+    event_cursor: str
+    source: str
+    scope: str
+    reason: str = 'native_unresolved'
+
+
+@dataclass(frozen=True)
 class SourcePage:
     previous_cursor: str | None
     next_cursor: str
     events: tuple[SourceEnvelope, ...]
     complete: bool = True
     gaps: tuple[str, ...] = ()
+    unresolved: tuple[SourceUnresolved, ...] = ()
 
 
 @dataclass(frozen=True)

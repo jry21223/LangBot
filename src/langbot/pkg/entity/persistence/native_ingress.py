@@ -13,6 +13,7 @@ class NativeSource(Base):
     binding = sa.Column(sa.JSON, nullable=False)
     binding_sha256 = sa.Column(sa.String(64), nullable=False)
     cursor = sa.Column(sa.Text, nullable=True)
+    last_source_sequence = sa.Column(sa.BigInteger,nullable=True)
     position = sa.Column(sa.Integer, nullable=False, default=0, server_default="0")
     router_cursor = sa.Column(sa.Integer, nullable=False, default=0, server_default="0")
     router_pending_page = sa.Column(sa.String(64), nullable=True)
@@ -105,10 +106,13 @@ class NativeGap(Base):
     workspace_uuid = sa.Column(sa.String(36),nullable=False)
     source_id = sa.Column(sa.String(64),nullable=False)
     code = sa.Column(sa.String(64),nullable=False)
+    reason = sa.Column(sa.String(32),nullable=False,default='owner_source_gap',server_default='owner_source_gap')
+    owner_event_id = sa.Column(sa.String(512),nullable=True)
+    source_sequence = sa.Column(sa.BigInteger,nullable=True)
     position = sa.Column(sa.Integer,nullable=False)
     upstream_cursor = sa.Column(sa.Text,nullable=False)
     __table_args__ = (
-        sa.UniqueConstraint('source_id','code'),
+        sa.UniqueConstraint('source_id','owner_event_id'),
         sa.UniqueConstraint('source_id','position'),
         sa.ForeignKeyConstraint(['workspace_uuid','source_id'],['native_ingress_sources.workspace_uuid','native_ingress_sources.id']),
     )
