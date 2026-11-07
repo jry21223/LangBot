@@ -7,7 +7,7 @@ from datetime import datetime
 import re
 
 from langbot.pkg.platform.native_contract import SourceBinding, SourceEnvelope, SourcePage
-from .reader import SourceUnavailable
+from .reader import SourceUnavailable, checked_owner_gaps
 
 _KINDS = {'created', 'baseline', 'baseline_snapshot', 'changed', 'attachments_changed', 'recalled'}
 _MESSAGE_FIELDS = {
@@ -233,18 +233,18 @@ def project_page(page: dict, binding: SourceBinding) -> SourcePage:
             or page.get('source') != binding.source
             or page.get('scope') != binding.scope
             or page.get('complete_page') is not True
-            or page.get('gaps') != []
             or page.get('coverage') not in {'success', 'success_zero'}
             or not isinstance(page.get('items'), list)
             or len(page['items']) > 100
         ):
             raise ValueError()
+        gaps = checked_owner_gaps(page)
         previous = page['previous_cursor']
         if previous is not None:
             _text(previous, 4096)
         next_cursor = _text(page['next_cursor'], 4096)
         events = tuple(_envelope(item, binding) for item in page['items'])
-        return SourcePage(previous, next_cursor, events, complete=True)
+        return SourcePage(previous, next_cursor, events, complete=True, gaps=gaps)
     except (ValueError, KeyError, TypeError, AttributeError):
         raise SourceUnavailable('invalid_page') from None
 

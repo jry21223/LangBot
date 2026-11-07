@@ -73,10 +73,13 @@ contact an existing account or read a real original.
 
 ## Coverage and owner identity proof
 
-Until the shared feed supports typed source gaps, a page with any nonempty gap,
-missing gap list, or coverage other than `success`/`success_zero` is rejected.
-This deliberately stops intake instead of advancing a cursor while silently
-losing coverage evidence.
+The exact owner gap codes `history_before_feed_unverified` and
+`original_unavailable` are retained in `SourcePage.gaps` and persisted by the
+shared Core as independent `NativeGap` records. They remain visible in the
+Router page and never become invented message records. Unknown or duplicate
+codes, a missing gap list, and coverage other than `success`/`success_zero`
+are rejected. A historical gap is never cleared merely because the current
+page was completely received.
 
 The fresh `/source-binding` candidate contract has exactly `source`, `scope`,
 `principal`, `workspace`, `revision`, `corp_id`, and
@@ -121,14 +124,17 @@ reference-only configuration change. The subsequent native discovery,
 capability and pure configuration-validation slice passed six tests. These are
 separate receipts, not an additive total or a production acceptance claim.
 
-Three image/voice/file integration regressions currently reproduce a known
-shared-Core failure: valid nonempty six-field `media_evidence` arrays are
-rejected by the Core metadata guard. The source adapter does not suppress those
-arrays to make admission appear successful. After the shared fix, rerun the
-composed source/SQLite/Core contracts, the real HTTP create/update secret
-rejection tests, and the coverage-gap handoff tests before declaring a
-switchable candidate. Pure constructor validation does not prove that the HTTP
-configuration API rejected a secret before persistence.
+The composed candidate against shared Core
+`6c4dc1d15130ce2757e909b55f5834c2615588cb` passed 73 isolated tests: 37 source
+reader/projection/adapter/SQLite integration tests and 36 shared Core contracts.
+This run includes native discovery, both owner gap codes, unknown-gap rejection,
+and the three image/voice/file six-field evidence regressions that previously
+failed the shared metadata guard. No test was deselected in this run.
+
+Real HTTP create/update rejection before secret persistence and the live
+Router/MCP/service-registry integration remain separate unaccepted gates.
+Pure constructor validation does not prove that the HTTP configuration API
+rejected a secret before persistence.
 
 No test here demonstrates a deployed service, current real-account grant,
 working parsing worker, or authorized end-to-end business delivery.

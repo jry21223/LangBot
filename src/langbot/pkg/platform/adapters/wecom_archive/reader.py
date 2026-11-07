@@ -14,6 +14,21 @@ from urllib.parse import urlencode, urlsplit
 from .transport import open_http, read_budget
 
 
+OWNER_GAP_CODES = frozenset({'history_before_feed_unverified', 'original_unavailable'})
+
+
+def checked_owner_gaps(page):
+    gaps = page.get('gaps')
+    if (
+        not isinstance(gaps, list)
+        or len(gaps) > 2
+        or any(not isinstance(code, str) or code not in OWNER_GAP_CODES for code in gaps)
+        or len(set(gaps)) != len(gaps)
+    ):
+        raise SourceUnavailable('missing_page')
+    return tuple(gaps)
+
+
 class SourceUnavailable(ValueError):
     def __init__(self, status='sync_failed'):
         self.status = status
@@ -159,10 +174,10 @@ class HttpSource:
                 or page.get('source') != self.source
                 or page.get('scope') != self.scope
                 or page.get('previous_cursor') != cursor
-                or page.get('gaps') != []
                 or page.get('coverage') not in {'success', 'success_zero'}
             ):
                 raise SourceUnavailable('missing_page')
+            checked_owner_gaps(page)
             if self.authorize(self.source, 'ingest') != before:
                 raise SourceUnavailable('permission_denied')
             return page

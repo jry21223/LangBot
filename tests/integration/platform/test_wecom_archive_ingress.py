@@ -230,13 +230,16 @@ async def test_native_connection_facts_require_owner_account_proof():
 
 
 @pytest.mark.asyncio
-async def test_owner_gap_cannot_advance_persistent_watermark(manager):
-    from langbot.pkg.platform.adapters.wecom_archive.reader import SourceUnavailable
-
+@pytest.mark.parametrize('gap_code', ['history_before_feed_unverified', 'original_unavailable'])
+async def test_owner_gap_reaches_router_without_losing_coverage(manager, gap_code):
     with archive_adapter() as (server, adapter):
-        server.page_overrides['gaps'] = ['history_before_feed_unverified']
+        server.page_overrides['gaps'] = [gap_code]
         store = NativeIngressStore(
-            manager, workspace_uuid='workspace-a', bot_uuid='bot-workspace-a', binding=adapter.native_source_binding()
+            manager,
+            workspace_uuid='workspace-a',
+            bot_uuid='bot-workspace-a',
+            binding=adapter.native_source_binding(),
+            owner_gap_codes=adapter.native_owner_gap_codes,
         )
         await store.initialize()
 
@@ -244,10 +247,13 @@ async def test_owner_gap_cannot_advance_persistent_watermark(manager):
             await adapter.authorize_native_source('workspace-a')
 
         adapter.attach_native_ingress(store, authorized)
-        with pytest.raises(SourceUnavailable):
-            await adapter.poll_once()
-        assert await store.checkpoint() is None
-        assert (await store.accepted_events(authorize=authorized))['items'] == []
+        await adapter.poll_once()
+        assert await store.checkpoint() == 'cursor-one'
+        page = await store.read_router_page('0', authorize=authorized)
+        assert [gap['code'] for gap in page['gaps']] == [gap_code]
+        assert page['gaps'][0]['reason'] == 'owner_source_gap'
+        assert len(page['items']) == 1
+        assert page['items'][0]['envelope']['record'] == 'message-one'
 
 
 @pytest.mark.asyncio
