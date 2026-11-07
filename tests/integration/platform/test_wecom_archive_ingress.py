@@ -65,6 +65,7 @@ async def test_native_poll_persists_owner_revision_and_router_shape(manager):
         adapter.attach_native_ingress(store, authorized)
         receipt = await adapter.poll_once()
         assert receipt.cursor == 'cursor-one'
+        assert adapter.native_runtime_state() == {'state': 'source_available'}
         assert await store.checkpoint() == 'cursor-one'
         page = await store.read_router_page('0', authorize=authorized)
         assert len(page['items']) == 1
@@ -118,6 +119,10 @@ async def test_permission_change_prevents_page_commit_and_keeps_watermark(manage
         adapter.attach_native_ingress(store, authorized)
         with pytest.raises(SourceUnavailable):
             await adapter.poll_once()
+        assert adapter.native_runtime_state() == {
+            'state': 'needs_authorization',
+            'error_code': 'source_permission_denied',
+        }
         assert await store.checkpoint() is None
 
 
@@ -165,6 +170,7 @@ async def test_archive_lifecycle_accepts_then_stops_without_a_second_pipeline_pa
             else:
                 raise AssertionError('native page was not durably accepted')
             assert await adapter.kill() is True
+            assert adapter.native_runtime_state() == {'state': 'disabled'}
             await asyncio.wait_for(task, 2)
             assert len((await store.accepted_events(authorize=authorized))['items']) == 1
         finally:
@@ -392,3 +398,38 @@ async def test_real_owner_proof_and_current_registration_both_gate_admission(man
             manager, workspace_uuid='workspace-a', bot_uuid='bot-workspace-a', binding=binding
         )
         assert await inspector.checkpoint() == 'cursor-one'
+
+
+@pytest.mark.asyncio
+async def test_different_records_may_each_have_revision_sequence_one_across_pages(manager):
+    with archive_adapter() as (server, adapter):
+        store = NativeIngressStore(
+            manager,
+            workspace_uuid='workspace-a',
+            bot_uuid='bot-workspace-a',
+            binding=adapter.native_source_binding(),
+            change_validator=adapter.native_validate_change,
+            owner_gap_codes=adapter.native_owner_gap_codes,
+        )
+        await store.initialize()
+
+        async def authorized():
+            await adapter.authorize_native_source('workspace-a')
+
+        adapter.attach_native_ingress(store, authorized)
+        await adapter.poll_once()
+        second = archived_page()
+        second['next_cursor'] = 'cursor-two'
+        second['items'][0].update(record='message-two', original='wecom:message/fixture-two/wr-1')
+        second['items'][0]['saved'].update(original='wecom:message/fixture-two/wr-1')
+        second['items'][0]['saved']['message'].update(message_id='message-two', source_seq=20)
+        second.pop('previous_cursor')
+        server.page_overrides = second
+        await adapter.poll_once()
+        page = await store.read_router_page('0', authorize=authorized)
+        changes = [item['envelope'] for item in page['items']]
+        assert [(change['record'], change['sequence']) for change in changes] == [
+            ('message-one', 1),
+            ('message-two', 1),
+        ]
+        assert await store.checkpoint() == 'cursor-two'

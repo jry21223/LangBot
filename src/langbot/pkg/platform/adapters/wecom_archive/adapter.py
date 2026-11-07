@@ -25,6 +25,8 @@ class WecomArchiveAdapter(AbstractPlatformAdapter):
     _store: Any = pydantic.PrivateAttr(default=None)
     _authorize: Callable[[], Awaitable[None]] | None = pydantic.PrivateAttr(default=None)
     _stop: asyncio.Event = pydantic.PrivateAttr(default_factory=asyncio.Event)
+    _native_state: str = pydantic.PrivateAttr(default='unknown')
+    _native_error: str | None = pydantic.PrivateAttr(default=None)
     _last_receipt: str | None = pydantic.PrivateAttr(default=None)
 
     def __init__(self, config: dict, logger):
@@ -94,6 +96,7 @@ class WecomArchiveAdapter(AbstractPlatformAdapter):
         return {key: proof[key] for key in ('source', 'scope', 'revision', 'workspace')} | {
             'account': proof['corp_id'],
             'origin': proof['origin'],
+            'authority_proof': {'binding': proof},
         }
 
     async def authorize_native_source(self, workspace_uuid: str) -> None:
@@ -126,20 +129,53 @@ class WecomArchiveAdapter(AbstractPlatformAdapter):
         if self.listeners.get(event_type) is callback:
             self.listeners.pop(event_type, None)
 
+    def native_runtime_state(self) -> dict:
+        state = {'state': self._native_state}
+        if self._native_error is not None:
+            state['error_code'] = self._native_error
+        return state
+
     async def poll_once(self):
         if self._store is None or self._authorize is None:
+            self._native_state, self._native_error = 'needs_authorization', 'native_source_authorizer_required'
             raise RuntimeError('native_source_authorizer_required')
-        await self._authorize()
-        cursor = await self._store.checkpoint()
-        page = await asyncio.to_thread(self._source_reader().read_changes, cursor, self.config.get('page_limit', 100))
-        projected = project_page(page, self.native_source_binding())
-        return await self._store.accept_page(projected, authorize=self._authorize)
+        try:
+            await self._authorize()
+            cursor = await self._store.checkpoint()
+            page = await asyncio.to_thread(
+                self._source_reader().read_changes, cursor, self.config.get('page_limit', 100)
+            )
+            projected = project_page(page, self.native_source_binding())
+            receipt = await self._store.accept_page(projected, authorize=self._authorize)
+        except SourceUnavailable as error:
+            errors = {
+                'permission_denied': ('needs_authorization', 'source_permission_denied'),
+                'credential_expired': ('needs_authorization', 'source_credential_expired'),
+                'disabled': ('needs_authorization', 'source_disabled'),
+                'missing_page': ('error', 'source_page_missing'),
+                'invalid_page': ('error', 'source_page_invalid'),
+            }
+            self._native_state, self._native_error = errors.get(error.status, ('disconnected', 'source_sync_failed'))
+            raise
+        except PermissionError:
+            self._native_state, self._native_error = 'needs_authorization', 'source_registration_unavailable'
+            raise
+        except Exception:
+            self._native_state, self._native_error = 'error', 'source_ingress_failed'
+            raise
+        self._native_state, self._native_error = ('disabled' if self._stop.is_set() else 'source_available'), None
+        return receipt
 
     async def run_async(self):
         if self._store is None or self._authorize is None:
             raise RuntimeError('native_source_authorizer_required')
         self._stop.clear()
-        await self._store.initialize()
+        self._native_state, self._native_error = 'connecting', None
+        try:
+            await self._store.initialize()
+        except Exception:
+            self._native_state, self._native_error = 'error', 'source_ingress_failed'
+            raise
         await self.logger.info('WeCom archive source starting in receive-only mode')
         try:
             while not self._stop.is_set():
@@ -167,5 +203,6 @@ class WecomArchiveAdapter(AbstractPlatformAdapter):
             await self.logger.info('WeCom archive source stopped')
 
     async def kill(self) -> bool:
+        self._native_state, self._native_error = 'disabled', None
         self._stop.set()
         return True
