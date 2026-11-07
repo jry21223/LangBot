@@ -49,8 +49,12 @@ async def attach_native_runtime(runtime):
     if not callable(factory):
         raise NativeAccessDenied("native_source_authorizer_not_configured")
     binding = runtime.adapter.native_source_binding()
+    await NativeAuthorization(runtime.ap).source_registration(runtime.execution_context,runtime.bot_entity.uuid,binding)
     if getattr(runtime.adapter, 'native_client_required', False):
         client_factory = getattr(runtime.ap, 'native_source_client_factory', None)
+        if client_factory is None:
+            from .native_clients import configured_native_client_factory
+            client_factory=configured_native_client_factory(runtime.ap)
         if not callable(client_factory):
             raise NativeAccessDenied('native_source_client_not_configured')
         credential_ref = runtime.adapter.native_credential_ref()

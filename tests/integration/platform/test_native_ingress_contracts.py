@@ -182,7 +182,7 @@ async def test_invalid_page_rolls_back_events_and_cursor(manager):
     assert (await ingress.accepted_events(authorize=allowed))['items'] == []
     await ingress.accept_page(SourcePage('10','11',(event(),)),authorize=allowed)
     changed = router_event()
-    changed.payload['native_id'] = 'changed'
+    changed.payload['origin'] = 'catchup'
     with pytest.raises(ValueError, match='version_conflict'):
         await ingress.accept_page(SourcePage('11','12',(event('native-2'),changed)),authorize=allowed)
     assert await ingress.checkpoint() == '11'
@@ -430,3 +430,120 @@ async def test_disabled_bot_registration_http_bootstrap_does_not_need_running_ad
     assert response.status_code==200,await response.get_json()
     body=await response.get_json()
     assert body['data']['source_enabled'] is False and body['data']['receiver_enabled'] is False
+
+
+@pytest.mark.asyncio
+async def test_quarantine_gap_only_page_is_durable_ackable_and_does_not_starve_later_change(manager):
+    ingress = store(manager)
+    await ingress.initialize('10')
+    unresolved = SourceEnvelope('unknown-event','v1','source:unresolved/unknown-event','unresolved',
+        {'native_unresolved':{'event_kind':'media.ready','event_cursor':'11','reason':'unknown_asset','asset_id':'asset-1'},
+         'dispatch_eligible':False})
+    await ingress.accept_page(SourcePage('10','11',(unresolved,)),authorize=allowed)
+    page=await ingress.read_router_page(None,authorize=allowed)
+    assert page['items']==[] and page['gaps']==[dict(event_id=_hash([ingress.source_id,'unknown-event','v1']),
+        reason='native_unresolved',source='test-source',scope='chat-a')]
+    assert await ingress.read_router_page(None,authorize=allowed)==page
+    ack=await ingress.ack_router_page(page['page_id'],page['page_sha256'],[],authorize=allowed)
+    assert ack['next_cursor']=='1'
+    assert await ingress.lookup_router_receipt(page['gaps'][0]['event_id'],authorize=allowed) is None
+    await ingress.accept_page(SourcePage('11','12',(event(),)),authorize=allowed)
+    next_page=await ingress.read_router_page('1',authorize=allowed)
+    assert len(next_page['items'])==1 and next_page['gaps']==[]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('location', ['payload','saved','native'])
+async def test_unrecognized_metadata_containers_are_not_persisted(manager,location):
+    ingress=store(manager)
+    await ingress.initialize('10')
+    candidate=router_event()
+    if location=='payload': candidate.payload['summary']='untrusted arbitrary text'
+    elif location=='saved': candidate.payload['change']['saved']['source_token']='not-a-real-secret'
+    else: candidate.payload['native']={'note':'untrusted arbitrary text'}
+    with pytest.raises(ValueError,match='metadata_only'):
+        await ingress.accept_page(SourcePage('10','11',(candidate,)),authorize=allowed)
+    assert await ingress.checkpoint()=='10'
+    assert (await ingress.accepted_events(authorize=allowed))['items']==[]
+
+
+@pytest.mark.asyncio
+async def test_empty_polls_need_no_ack_and_do_not_accumulate_pages(manager):
+    from langbot.pkg.entity.persistence.native_ingress import NativePage
+    ingress=store(manager)
+    await ingress.initialize('10')
+    for cursor in [None,'0','0']:
+        page=await ingress.read_router_page(cursor,authorize=allowed)
+        assert page['items']==[] and page['gaps']==[] and page['next_cursor']=='0'
+    async with manager.tenant_uow('workspace-a') as uow:
+        assert (await uow.session.execute(sa.select(sa.func.count()).select_from(NativePage))).scalar()==0
+    await ingress.accept_page(SourcePage('10','11',(event(),)),authorize=allowed)
+    assert len((await ingress.read_router_page('0',authorize=allowed))['items'])==1
+
+
+@pytest.mark.asyncio
+async def test_registered_original_reader_checks_latest_revision_and_recall_before_provider(manager):
+    from langbot.pkg.platform.native_access import register_native_access
+    from langbot.pkg.platform.native_originals import read_native_original
+    await key_fixture(manager)
+    ingress=store(manager)
+    await ingress.initialize('10')
+    await ingress.accept_page(SourcePage('10','11',(event(),)),authorize=allowed)
+    class Adapter:
+        calls=0
+        async def native_original(self,ref,version):
+            self.calls+=1
+            return dict(reference=ref,version=version,text='你好\nsource original')
+    adapter=Adapter()
+    runtime=SimpleNamespace(native_ingress_store=ingress,adapter=adapter,workspace_uuid='workspace-a',
+        bot_entity=SimpleNamespace(uuid='bot-workspace-a'),assert_execution_active=allowed,native_source_authorize=allowed)
+    async def get_bot(ctx,bot_uuid):
+        return runtime if ctx.workspace_uuid=='workspace-a' and bot_uuid=='bot-workspace-a' else None
+    ap=SimpleNamespace(persistence_mgr=manager,platform_mgr=SimpleNamespace(get_bot_by_uuid=get_bot))
+    await register_native_access(ap,context(),'bot-workspace-a',ingress.binding,
+        receiver_id='unique-host',receiver_api_key_uuid='dedicated-key',source_enabled=True,receiver_enabled=True)
+    receiver=context(principal_type='api_key',key='dedicated-key',permissions=[])
+    result=await read_native_original(ap,receiver,'bot-workspace-a','original','source:message/native-1/v1','v1')
+    assert result['text']=='你好\nsource original' and adapter.calls==1
+    recalled=router_event(version='v2',kind='recalled',eligible=False)
+    await ingress.accept_page(SourcePage('11','12',(recalled,)),authorize=allowed)
+    with pytest.raises(PermissionError,match='changed_or_recalled'):
+        await read_native_original(ap,receiver,'bot-workspace-a','original','source:message/native-1/v1','v1')
+    assert adapter.calls==1
+
+
+@pytest.mark.asyncio
+async def test_client_reference_is_exact_and_never_allows_arbitrary_files_or_disabled_grants(manager,tmp_path):
+    import dataclasses
+    from langbot.pkg.platform.native_access import register_native_access
+    from langbot.pkg.platform.native_clients import NativeClientRegistry
+    binding=store(manager).binding
+    ap=SimpleNamespace(persistence_mgr=manager)
+    await register_native_access(ap,context(),'bot-workspace-a',binding,source_enabled=True)
+    secret=tmp_path/'wx-read'
+    secret.write_text('synthetic-test-only-value')
+    secret.chmod(0o400)
+    entry=dict(credential_ref='read-fixture',enabled=True,workspace_uuid='workspace-a',bot_uuid='bot-workspace-a',
+        binding_sha256=_hash(dataclasses.asdict(binding)),provider='fixture',endpoint='https://fixture.invalid/v1',secret_file='wx-read')
+    calls=[]
+    def constructor(endpoint,credential,account):
+        calls.append((endpoint,account))
+        assert credential=='synthetic-test-only-value'
+        return SimpleNamespace(account_id=account)
+    registry=NativeClientRegistry(ap,[entry],constructors={'fixture':constructor},secret_root=str(tmp_path))
+    result=await registry(context(),'bot-workspace-a',binding,'read-fixture')
+    assert result.account_id=='account-a' and len(calls)==1
+    for modification in [dict(enabled=False),dict(bot_uuid='other-bot'),dict(binding_sha256='0'*64),
+                         dict(workspace_uuid='workspace-b'),dict(secret_file='../wx-read')]:
+        invalid=NativeClientRegistry(ap,[dict(entry,**modification)],constructors={'fixture':constructor},secret_root=str(tmp_path))
+        with pytest.raises(PermissionError):
+            await invalid(context(),'bot-workspace-a',binding,'read-fixture')
+    secret.chmod(0o444)
+    with pytest.raises(PermissionError,match='permissions_invalid'):
+        await registry(context(),'bot-workspace-a',binding,'read-fixture')
+    secret.unlink()
+    (tmp_path/'other-file').write_text('not-read')
+    secret.symlink_to(tmp_path/'other-file')
+    with pytest.raises(PermissionError,match='mount_unavailable'):
+        await registry(context(),'bot-workspace-a',binding,'read-fixture')
+    assert len(calls)==1

@@ -100,6 +100,14 @@ class LangBotMCPServer:
             store, authorize, _ = await authorized_native_store(ap, context, bot_uuid)
             return _dump(await store.lookup_router_receipt(event_id, authorize=authorize))
 
+        @mcp.tool(description='Read exact currently authorized native source authority or text original/manifest/chunk; never reads unknown references.')
+        async def read_native_source_original(bot_uuid: str, operation: str, reference: str, version: str, part_index: int | None = None) -> str:
+            from ...platform.native_originals import read_native_original
+            context = _authorized(Permission.RUNTIME_OPERATE)
+            if operation not in {'authority','original','manifest','chunk'}:
+                raise ValueError('native_original_operation_invalid')
+            return _dump(await read_native_original(ap,context,bot_uuid,operation,reference,version,part_index=part_index))
+
         # ----- System (read-only) -------------------------------------- #
         @mcp.tool(description='Get basic LangBot system/runtime information (version, edition).')
         async def get_system_info() -> str:

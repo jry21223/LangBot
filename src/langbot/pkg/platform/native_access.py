@@ -53,7 +53,7 @@ async def register_native_access(ap, request_context, bot_uuid, binding, *, rece
     No secret is accepted or returned. Enabling is an explicit operational action,
     separate from installing code or creating a disabled adapter configuration.
     """
-    if request_context.principal.principal_type != PrincipalType.ACCOUNT:
+    if request_context.principal.principal_type != PrincipalType.ACCOUNT or not request_context.principal.account_uuid:
         raise NativeAccessDenied("native_registration_requires_account")
     require_permission(request_context, Permission.RESOURCE_MANAGE)
     require_permission(request_context, Permission.API_KEY_MANAGE)
@@ -61,6 +61,8 @@ async def register_native_access(ap, request_context, bot_uuid, binding, *, rece
         _identifier(value, optional=True)
     if type(source_enabled) is not bool or type(receiver_enabled) is not bool:
         raise ValueError('native_registration_flag_invalid')
+    if receiver_id is not None and len(receiver_id)>255:
+        raise ValueError('native_receiver_id_invalid')
     workspace = request_context.workspace_uuid
     source_id = _hash([workspace, bot_uuid])
     binding_hash = _hash(asdict(binding))
@@ -78,6 +80,8 @@ async def register_native_access(ap, request_context, bot_uuid, binding, *, rece
         row = (await session.execute(sa.select(NativeAccess).where(
             NativeAccess.id == source_id).with_for_update())).scalar_one_or_none()
         if row is None:
+            if expected_revision is not None:
+                raise ValueError('native_registration_revision_conflict')
             row = NativeAccess(id=source_id, workspace_uuid=workspace, bot_uuid=bot_uuid,
                 binding_sha256=binding_hash, source_revision=1, receiver_revision=1)
             session.add(row)
@@ -105,6 +109,18 @@ async def register_native_access(ap, request_context, bot_uuid, binding, *, rece
 class NativeAuthorization:
     def __init__(self, ap):
         self.ap = ap
+
+    async def source_registration(self,context,bot_uuid,binding):
+        from .native_ingress import NativeIngressStore
+        store=NativeIngressStore(self.ap.persistence_mgr,workspace_uuid=context.workspace_uuid,
+                                 bot_uuid=bot_uuid,binding=binding)
+        async with self.ap.persistence_mgr.tenant_uow(context.workspace_uuid) as uow:
+            row=await uow.session.get(NativeAccess,store.source_id)
+            if row is None:
+                raise NativeAccessDenied('native_source_not_registered')
+            fence=NativeFence(row.source_revision)
+            await check_fence(uow.session,store,fence)
+        return fence
 
     async def source_factory(self, context, bot_uuid, binding, adapter):
         from .native_ingress import NativeIngressStore
@@ -164,7 +180,7 @@ class NativeAuthorization:
 
 async def registration_binding(ap, request_context, bot_uuid):
     """Resolve a disabled persistent bot without opening its source or secrets."""
-    if request_context.principal.principal_type != PrincipalType.ACCOUNT:
+    if request_context.principal.principal_type != PrincipalType.ACCOUNT or not request_context.principal.account_uuid:
         raise NativeAccessDenied("native_registration_requires_account")
     require_permission(request_context,Permission.API_KEY_MANAGE)
     require_permission(request_context,Permission.RESOURCE_MANAGE)

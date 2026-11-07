@@ -34,19 +34,46 @@ def _identifier(value, *, optional=False):
     return value
 
 
-def _metadata(value):
-    """Reject common secret/body containers; originals stay at their source."""
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if not isinstance(key, str) or key.lower() in {
-                'body', 'content', 'text', 'raw_payload', 'raw', 'credentials', 'token',
-                'authorization', 'cookie', 'password', 'api_key', 'secret',
-            }:
-                raise ValueError('native_metadata_only')
-            _metadata(item)
-    elif isinstance(value, list):
+_METADATA_FIELDS = {
+    'payload': {'change','native','native_version','event_cursor','business_at','origin','direction',
+                'message_type','body_sha256','media','recalled','dispatch_eligible','qualification','native_unresolved'},
+    'change': {'source','scope','record','version','sequence','kind','business_at','observed_at','original',
+               'projection_hash','goal_reference','saved','original_available'},
+    'saved': {'version','sequence','observed_at','original','attachments','message','account_id','thread_id',
+              'message_id','sender_id','server_id','direction','message_type','body_available'},
+    'message': {'source_seq','message_id','chat_id','chat_type','sender_user_id','sender_identity_type',
+                'sender_access_type','message_type','sent_at','action','media_evidence','recalled_message_id',
+                'content_materialization'},
+    'content_materialization': {'status','evidence_fingerprint','parser_version','input_hash','result_sha256',
+                                'text_bytes','parts'},
+    'attachments': {'reference','status','type','sha256','size'},
+    'native': {'account_id','thread_id','message_id','server_id','sender_id'},
+    'media': {'asset_id','kind','state','sha256','byte_length','content_type'},
+    'native_unresolved': {'event_kind','event_cursor','reason','asset_id','thread_id','server_id','message_id'},
+}
+
+
+def _metadata(value, field='payload'):
+    """Bounded supported source schemas; unknown/free-form containers are refused.
+
+    Source-specific validators additionally enforce exact nested shape, hashes,
+    enums and native identity relationships before a source ACK can escape.
+    """
+    if isinstance(value,dict):
+        if field not in _METADATA_FIELDS or not set(value) <= _METADATA_FIELDS[field]:
+            raise ValueError('native_metadata_only')
+        for key,item in value.items():
+            _metadata(item,key)
+    elif isinstance(value,list):
+        if len(value)>100:
+            raise ValueError('native_metadata_only')
         for item in value:
-            _metadata(item)
+            _metadata(item,field)
+    elif isinstance(value,str):
+        if len(value)>512 or any(ord(c)<32 for c in value):
+            raise ValueError('native_metadata_only')
+    elif value is not None and (type(value) not in {bool,int} or (type(value) is int and abs(value)>2**63-1)):
+        raise ValueError('native_metadata_only')
 
 
 class NativeIngressStore:
@@ -54,6 +81,8 @@ class NativeIngressStore:
         self.manager = manager
         self.workspace_uuid = _identifier(workspace_uuid)
         self.bot_uuid = _identifier(bot_uuid)
+        if len(bot_uuid)>255 or len(workspace_uuid)>36:
+            raise ValueError("native_owner_identifier_invalid")
         self.change_validator = change_validator
         self.authorization_fence = authorization_fence
         self.receiver_id = getattr(authorization_fence, "receiver_id", None)
@@ -233,16 +262,27 @@ class NativeIngressStore:
     def _router_change(self, event):
         return self._checked_change(event.envelope)
 
+    def _router_parts(self, rows):
+        items, gaps = [], []
+        for event in rows:
+            if event.envelope['kind'] == 'unresolved':
+                gaps.append(dict(event_id=event.id,reason='native_unresolved',
+                                 source=self.binding.source,scope=self.binding.scope))
+            else:
+                items.append(dict(event_id=event.id,envelope=self._router_change(event)))
+        return items,gaps
+
     async def _router_page_value(self, session, page):
-        items = []
+        rows = []
         for event_id in page.event_ids:
             event = await session.get(NativeEvent, event_id)
             if event is None or event.source_id != self.source_id:
                 raise ValueError('native_router_event_missing')
-            items.append(dict(event_id=event.id, envelope=self._router_change(event)))
+            rows.append(event)
+        items,gaps = self._router_parts(rows)
         value = dict(page_id=page.id, source=self.binding.source, scope=self.binding.scope,
                      complete_page=True, previous_cursor=page.previous_cursor, next_cursor=page.cursor,
-                     gaps=[], items=items)
+                     gaps=gaps, items=items)
         if _hash(value) != page.fingerprint:
             raise ValueError('native_router_page_changed')
         return dict(value, page_sha256=page.fingerprint)
@@ -275,9 +315,10 @@ class NativeIngressStore:
             ).order_by(NativeEvent.position).limit(limit))).scalars().all()
             next_cursor = str(rows[-1].position) if rows else str(position)
             page_id = _hash([self.source_id, 'router', self.receiver_id, cursor, next_cursor])
+            items,gaps = self._router_parts(rows)
             value = dict(page_id=page_id, source=self.binding.source, scope=self.binding.scope,
                          complete_page=True, previous_cursor=cursor, next_cursor=next_cursor,
-                         gaps=[], items=[dict(event_id=r.id, envelope=self._router_change(r)) for r in rows])
+                         gaps=gaps, items=items)
             fingerprint = _hash(value)
             # An empty poll has no acknowledgement and must not pin the feed.
             if rows:
@@ -305,12 +346,17 @@ class NativeIngressStore:
             page = await session.get(NativePage, page_id)
             if page is None or page.source_id != self.source_id or page.direction != 'router' or page.fingerprint != page_sha256 or page.receiver_id != self.receiver_id:
                 raise ValueError('native_router_page_unknown')
-            if len(receipts) != len(page.event_ids) or len({r.get('event_id') for r in receipts if isinstance(r, dict)}) != len(receipts):
+            receipt_event_ids = []
+            for event_id in page.event_ids:
+                event = await session.get(NativeEvent,event_id)
+                if event.envelope['kind'] != 'unresolved':
+                    receipt_event_ids.append(event_id)
+            if len(receipts) != len(receipt_event_ids) or len({r.get('event_id') for r in receipts if isinstance(r, dict)}) != len(receipts):
                 raise ValueError('native_router_receipts_incomplete')
             by_id = {r['event_id']: r for r in receipts}
-            if set(by_id) != set(page.event_ids):
+            if set(by_id) != set(receipt_event_ids):
                 raise ValueError('native_router_receipts_incomplete')
-            for event_id in page.event_ids:
+            for event_id in receipt_event_ids:
                 event = await session.get(NativeEvent, event_id)
                 receipt = by_id[event_id]
                 expected = dict(event_id=event_id, source=self.binding.source,
@@ -349,6 +395,8 @@ class NativeIngressStore:
         """
         if self.binding.read_only:
             raise ValueError('native_receive_only')
+        if isinstance(operation_id,str) and len(operation_id)>255:
+            raise ValueError('native_operation_id_invalid')
         for value in (operation_id, target_type, target_id):
             _identifier(value)
         await authorize()
@@ -397,3 +445,27 @@ class NativeIngressStore:
                 operation.status = result['status']
                 operation.receipt = result
             return operation.receipt or result
+
+    async def require_current_original(self, reference, version, *, authorize: Authorize):
+        """An accepted exact source revision, not a caller-selected remote URL."""
+        _identifier(reference)
+        _identifier(version)
+        await authorize()
+        async with self._own_transaction() as uow:
+            session=uow.session
+            await self._source(session)
+            row=(await session.execute(sa.select(NativeEvent).where(
+                NativeEvent.source_id==self.source_id,
+                NativeEvent.envelope['reference'].as_string()==reference,
+                NativeEvent.envelope['version'].as_string()==version,
+            ).order_by(NativeEvent.position.desc()).limit(1))).scalar_one_or_none()
+            if row is None or row.envelope['kind']=='unresolved':
+                raise NativeAccessDenied('native_original_not_accepted')
+            record=row.envelope['record']
+            latest=(await session.execute(sa.select(NativeEvent).where(
+                NativeEvent.source_id==self.source_id,
+                NativeEvent.envelope['record'].as_string()==record,
+            ).order_by(NativeEvent.position.desc()).limit(1))).scalar_one()
+            if latest.id!=row.id or latest.envelope['kind'] in {'recalled','recall'}:
+                raise NativeAccessDenied('native_original_changed_or_recalled')
+            return row.envelope
