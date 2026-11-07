@@ -94,7 +94,7 @@ async def test_stable_send_key_unknown_and_needs_review_do_not_resend(manager):
     store = NativeIngressStore(manager, workspace_uuid='workspace-a', bot_uuid='bot-workspace-a', binding=binding)
     await store.initialize('9')
     client = AsyncMock()
-    provider = WxSendProvider(client, {'group-1'})
+    provider = WxSendProvider(client, {'group-1'}, target_id='group-1')
     client.send_text.side_effect = TimeoutError('unknown outcome')
     first = await store.send(
         'host-op-1', 'group', 'group-1', {'text': 'same content'}, provider=provider, authorize=allowed
@@ -220,3 +220,83 @@ async def test_actual_wx_quarantine_does_not_starve_next_message_or_forge_host_r
     }
     await store.ack_router_page(page['page_id'], page['page_sha256'], [receipt], authorize=allowed)
     assert await store.lookup_router_receipt(page['gaps'][0]['event_id'], authorize=allowed) is None
+
+
+@pytest.mark.asyncio
+async def test_protected_core_reader_uses_fresh_wx_manifest_bytes_and_current_receiver_grant(manager):
+    from hashlib import sha256
+    from types import SimpleNamespace
+    from tests.unit_tests.platform.test_agent_wechat_source import adapter_fixture
+    from tests.integration.platform.test_native_ingress_contracts import context, key_fixture
+    from langbot.pkg.platform.native_access import register_native_access
+    from langbot.pkg.platform.native_runtime import attach_native_runtime
+    from langbot.pkg.platform.native_originals import read_native_original
+
+    adapter = adapter_fixture()
+    client = AsyncMock()
+    client.account_id = 'account-1'
+    client.status.return_value = {
+        'id': 'account-1',
+        'authenticated': True,
+        'contactSyncReady': True,
+        'connection': 'online',
+        'incomingTransport': 'native_push',
+    }
+    data = b'synthetic-media'
+    checksum = sha256(data).hexdigest()
+    client.message.return_value = message(type=3, body=None)
+    client.media.return_value = {
+        'items': [
+            {
+                'id': 'asset-1',
+                'accountId': 'account-1',
+                'messageId': 'msg-1',
+                'kind': 'image',
+                'state': 'available',
+                'sha256': checksum,
+                'byteLength': len(data),
+                'contentType': 'image/png',
+            }
+        ]
+    }
+    client.media_content.return_value = data
+    ap = SimpleNamespace(persistence_mgr=manager, native_source_client_factory=AsyncMock(return_value=client))
+    await key_fixture(manager)
+    binding = adapter.native_source_binding()
+    await register_native_access(
+        ap,
+        context(),
+        'bot-workspace-a',
+        binding,
+        source_enabled=True,
+        receiver_enabled=True,
+        receiver_id='unique-host',
+        receiver_api_key_uuid='dedicated-key',
+    )
+    runtime = SimpleNamespace(
+        ap=ap,
+        adapter=adapter,
+        execution_context=context(),
+        bot_entity=SimpleNamespace(uuid='bot-workspace-a'),
+        workspace_uuid='workspace-a',
+        assert_execution_active=AsyncMock(),
+    )
+    await attach_native_runtime(runtime)
+    ap.platform_mgr = SimpleNamespace(get_bot_by_uuid=AsyncMock(return_value=runtime))
+    await adapter._worker().initialize()
+    await adapter.worker.accept_event(event())
+    ref, (version, _) = next(iter(adapter.worker.records.items()))
+    reader = context(principal_type='api_key', key='dedicated-key', permissions=[])
+    manifest = await read_native_original(ap, reader, 'bot-workspace-a', 'manifest', ref, version)
+    assert manifest['kind'] == 'media' and manifest['assets'][0]['asset_id'] == 'asset-1'
+    result = await read_native_original(ap, reader, 'bot-workspace-a', 'media', ref, version, asset_id='asset-1')
+    assert result['bytes'] == data and result['sha256'] == checksum
+    with pytest.raises(WxProtocolError, match='media_not_available'):
+        await read_native_original(ap, reader, 'bot-workspace-a', 'media', ref, version, asset_id='unknown')
+    before = client.message.await_count
+    await register_native_access(
+        ap, context(), 'bot-workspace-a', binding, source_enabled=True, receiver_enabled=False, expected_revision=1
+    )
+    with pytest.raises(PermissionError):
+        await read_native_original(ap, reader, 'bot-workspace-a', 'media', ref, version, asset_id='asset-1')
+    assert client.message.await_count == before

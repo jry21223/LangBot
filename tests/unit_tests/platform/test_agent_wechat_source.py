@@ -147,7 +147,7 @@ async def test_raw_send_cannot_use_read_grant_as_send_grant():
     from langbot.pkg.platform.adapters.agent_wechat.sender import WxSendProvider
 
     worker, client, _, _ = source()
-    provider = WxSendProvider(client, {'group-1'})
+    provider = WxSendProvider(client, {'group-1'}, target_id='group-1')
     with pytest.raises(WxProtocolError, match='scope'):
         await provider.send('host-operation', 'group', 'unapproved', {'text': 'synthetic'})
     client.send_text.assert_not_called()
@@ -346,3 +346,15 @@ async def test_media_manifest_exposes_only_exact_fresh_asset_metadata_for_existi
     client.message.return_value = message(type=3, body=None, recall={'observedAt': 'now'})
     with pytest.raises(WxProtocolError):
         await worker.native_original_manifest(envelope.reference, envelope.version)
+
+
+@pytest.mark.asyncio
+async def test_unknown_send_lookup_must_match_exact_target_not_just_any_approved_group():
+    from langbot.pkg.platform.adapters.agent_wechat.sender import WxSendProvider
+
+    client = AsyncMock()
+    client.lookup_send.return_value = {'destination': 'group-2', 'state': 'accepted', 'id': 'intent'}
+    provider = WxSendProvider(client, {'group-1', 'group-2'}, target_id='group-1')
+    with pytest.raises(WxProtocolError, match='send_scope_rejected'):
+        await provider.lookup('original-host-key')
+    client.send_text.assert_not_called()

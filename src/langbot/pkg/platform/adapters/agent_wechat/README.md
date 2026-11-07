@@ -26,7 +26,8 @@ Original text/UTF-8 chunks are read fresh and checked before and after access.
 Media manifests return `kind=media`, the exact native version, and only the
 accepted asset ID/kind/state/SHA-256/byte length/MIME list. Text manifests use
 `kind=text` with the text SHA-256, byte length and ordered chunk count. Neither
-manifest exposes arbitrary source URLs or filenames. Media reads require the exact accepted asset plus current account/message,
+manifest exposes arbitrary source URLs or filenames. The bounded media read limit is 32 MiB; larger assets return a size error, not
+a successful parse. Media reads require the exact accepted asset plus current account/message,
 version, recall, SHA-256, byte length and MIME checks. No filename or XML is
 pretended to be extracted document text. Derived media parsing must use the
 existing parser owner and its approved runtime.

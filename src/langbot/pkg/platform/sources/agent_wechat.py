@@ -149,7 +149,7 @@ class AgentWeChatAdapter(AbstractMessagePlatformAdapter):
             target_type,
             target_id,
             {'text': ''.join(component.text for component in message)},
-            provider=WxSendProvider(self.client, self.threads),
+            provider=WxSendProvider(self.client, self.threads, target_id=target_id),
             authorize=authorize_send,
         )
 
