@@ -209,3 +209,35 @@ async def test_native_source_rejects_local_route_configuration_and_existing_debu
         json={'event_type':'message.received','event_data':{'message_text':'must not become native source'}})
     assert response.status_code==409,await response.get_json()
     assert (await response.get_json())['code']=='native_ingress_debug_unavailable'
+
+
+@pytest.mark.asyncio
+async def test_stale_enable_cannot_use_clean_config_after_concurrent_draft_clear(manager):
+    import asyncio
+    bot_service=service(manager)
+    async with manager.tenant_scope('workspace-a'):
+        bot_uuid=await bot_service.create_bot(context(),dict(name='complete-disabled',description='',
+            adapter='wecom-archive',adapter_config=config(),enable=False))
+    paused=asyncio.Event()
+    resume=asyncio.Event()
+    original_get=bot_service.get_bot
+    async def paused_get(ctx,uuid,include_secret=False):
+        value=await original_get(ctx,uuid,include_secret=include_secret)
+        if asyncio.current_task().get_name()=='stale-enable-writer' and not paused.is_set():
+            paused.set()
+            await resume.wait()
+        return value
+    bot_service.get_bot=paused_get
+    async def stale_enable():
+        async with manager.tenant_scope('workspace-a'):
+            await bot_service.update_bot(context(),bot_uuid,{'enable':True})
+    task=asyncio.create_task(stale_enable(),name='stale-enable-writer')
+    await paused.wait()
+    async with manager.tenant_scope('workspace-a'):
+        await bot_service.update_bot(context(),bot_uuid,{'adapter_config':{}})
+    resume.set()
+    with pytest.raises(ValueError,match='configuration_changed_retry'):
+        await task
+    async with manager.tenant_uow('workspace-a') as uow:
+        row=await uow.session.get(Bot,bot_uuid)
+        assert row.enable is False and row.adapter_config=={}

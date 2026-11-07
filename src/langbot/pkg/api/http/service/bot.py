@@ -809,8 +809,28 @@ class BotService:
         conditions=[persistence_bot.Bot.uuid==bot_uuid,persistence_bot.Bot.adapter.in_(aliases)]
         registry=getattr(getattr(self.ap,'platform_mgr',None),'adapter_dict',{})
         target_type=registry.get(canonical_adapter_name(target_adapter)) if isinstance(registry,dict) else None
-        if callable(getattr(target_type,'native_source_binding',None)) and type(existing.get('enable')) is bool:
-            conditions.append(persistence_bot.Bot.enable==existing['enable'])
+        previous_type=registry.get(canonical_adapter_name(observed_adapter)) if isinstance(registry,dict) else None
+        native_update=(callable(getattr(target_type,'native_source_binding',None))
+                       or callable(getattr(previous_type,'native_source_binding',None)))
+        if native_update:
+            if type(existing.get('enable')) is bool:
+                conditions.append(persistence_bot.Bot.enable==existing['enable'])
+            # Validate and CAS the same database config snapshot. A disabled
+            # writer can change it without changing adapter/enable. Read DB-native
+            # JSON text (also works for PostgreSQL JSON, which has no '=' op).
+            raw_query=scope_statement(sqlalchemy.select(
+                sqlalchemy.cast(persistence_bot.Bot.adapter_config,sqlalchemy.Text)).where(
+                    persistence_bot.Bot.uuid==bot_uuid),persistence_bot.Bot,workspace_uuid)
+            raw_result=await self.ap.persistence_mgr.execute_async(raw_query)
+            raw_config=raw_result.scalar_one_or_none()
+            import json
+            if raw_config is None:
+                raise ValueError('bot_configuration_changed_retry')
+            # Old invalid native config is intentionally redacted by get_bot.
+            # Its explicit complete replacement was independently validated above.
+            if not existing.get('native_configuration_invalid') and json.loads(raw_config)!=existing.get('adapter_config'):
+                raise ValueError('bot_configuration_changed_retry')
+            conditions.append(sqlalchemy.cast(persistence_bot.Bot.adapter_config,sqlalchemy.Text)==raw_config)
         result = await self.ap.persistence_mgr.execute_async(
             scope_statement(
                 sqlalchemy.update(persistence_bot.Bot).values(update_data).where(*conditions),
