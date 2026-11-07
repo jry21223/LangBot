@@ -117,3 +117,62 @@ async def test_stable_send_key_unknown_and_needs_review_do_not_resend(manager):
     )
     assert again == review
     assert client.send_text.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_real_native_runtime_attaches_wx_client_before_current_source_authorization(manager):
+    from types import SimpleNamespace
+    from langbot.pkg.platform.sources.agent_wechat import AgentWeChatAdapter
+    from langbot_plugin.api.definition.abstract.platform.event_logger import AbstractEventLogger
+    from langbot.pkg.platform.native_access import register_native_access
+    from langbot.pkg.platform.native_runtime import attach_native_runtime
+    from tests.integration.platform.test_native_ingress_contracts import context
+
+    adapter = AgentWeChatAdapter(
+        {
+            'account_id': 'account-1',
+            'allowed_threads': ['group-1'],
+            'source_id': 'fixture',
+            'scope_id': 'scope',
+            'credential_ref': 'existing',
+            'consumer_id': 'consumer',
+            'initial_cursor': '9',
+            'activation_at': '2026-11-08T00:00:00Z',
+        },
+        AsyncMock(spec=AbstractEventLogger),
+    )
+    client = AsyncMock()
+    client.account_id = 'account-1'
+    client.status.return_value = {
+        'id': 'account-1',
+        'authenticated': True,
+        'contactSyncReady': True,
+        'connection': 'online',
+        'incomingTransport': 'native_push',
+    }
+    factory = AsyncMock(return_value=client)
+    ap = SimpleNamespace(persistence_mgr=manager, native_source_client_factory=factory)
+    binding = adapter.native_source_binding()
+    await register_native_access(ap, context(), 'bot-workspace-a', binding, source_enabled=True)
+    runtime = SimpleNamespace(
+        ap=ap,
+        adapter=adapter,
+        execution_context=context(),
+        bot_entity=SimpleNamespace(uuid='bot-workspace-a'),
+        workspace_uuid='workspace-a',
+        assert_execution_active=AsyncMock(),
+    )
+    store = await attach_native_runtime(runtime)
+    assert adapter.store is store
+    await adapter._worker().initialize()
+    client.message.return_value = message()
+    client.media.return_value = {'items': []}
+    await adapter.worker.accept_event(event())
+    assert await store.checkpoint() == '10'
+    client.ack.assert_awaited_once_with('consumer', '10')
+    factory.assert_awaited_once_with(runtime.execution_context, 'bot-workspace-a', binding, 'existing')
+    await register_native_access(ap, context(), 'bot-workspace-a', binding, source_enabled=False, expected_revision=1)
+    with pytest.raises(PermissionError):
+        await adapter.native_authority(
+            next(iter(adapter.worker.records)), next(iter(adapter.worker.records.values()))[0]
+        )
