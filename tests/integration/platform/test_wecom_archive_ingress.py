@@ -243,7 +243,6 @@ async def test_owner_gap_cannot_advance_persistent_watermark(manager):
 @pytest.mark.asyncio
 async def test_persisted_admission_rejects_poisoned_saved_metadata(manager):
     from langbot.pkg.platform.adapters.wecom_archive.projection import project_page
-    from langbot.pkg.platform.adapters.wecom_archive.reader import SourceUnavailable
 
     with archive_adapter() as (_, adapter):
         store = NativeIngressStore(
@@ -260,7 +259,7 @@ async def test_persisted_admission_rejects_poisoned_saved_metadata(manager):
 
         page = project_page(archived_page(), adapter.native_source_binding())
         page.events[0].payload['change']['saved']['message']['summary'] = 'unapproved original'
-        with pytest.raises(SourceUnavailable):
+        with pytest.raises(ValueError):
             await store.accept_page(page, authorize=authorized)
         assert await store.checkpoint() is None
         assert (await store.accepted_events(authorize=authorized))['items'] == []
