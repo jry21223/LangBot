@@ -11,13 +11,6 @@ metadata:
 spec:
   legacy: true
   config:
-    - name: endpoint
-      label:
-        en_US: Existing wx endpoint
-        zh_Hans: 现有 wx 地址
-      type: string
-      required: true
-      default: ""
     - name: credential_ref
       label:
         en_US: Existing credential reference

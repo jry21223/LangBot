@@ -1,6 +1,7 @@
 """Native Agent WeChat channel; credentials and grants come from trusted factories."""
 
 import asyncio
+import re
 from typing import Any, ClassVar
 from pydantic import Field
 
@@ -26,6 +27,7 @@ class AgentWeChatAdapter(AbstractMessagePlatformAdapter):
     listeners: dict = Field(default_factory=dict)
 
     def __init__(self, config, logger):
+        self.native_validate_config(config)
         super().__init__(config=dict(config), logger=logger, bot_account_id=config['account_id'])
         self.client = self.store = self.authorize = self.worker = self.task = None
         self.sender_authorize = None
@@ -37,6 +39,42 @@ class AgentWeChatAdapter(AbstractMessagePlatformAdapter):
         for key in ('account_id', 'source_id', 'scope_id', 'credential_ref', 'consumer_id', 'initial_cursor'):
             identity(config.get(key))
         timestamp(config.get('activation_at'))
+
+    @staticmethod
+    def native_validate_config(config):
+        required = {
+            'account_id',
+            'allowed_threads',
+            'source_id',
+            'scope_id',
+            'credential_ref',
+            'consumer_id',
+            'initial_cursor',
+            'activation_at',
+        }
+        if not isinstance(config, dict) or not required <= set(config) or set(config) - required - {'send_enabled'}:
+            raise ValueError('native_config_fields_invalid')
+        for key in required - {'allowed_threads', 'activation_at'}:
+            identity(config[key])
+            if len(config[key]) > 512:
+                raise ValueError('native_config_identifier_too_long')
+        if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', config['credential_ref']):
+            raise ValueError('native_credential_reference_invalid')
+        threads = config['allowed_threads']
+        if (
+            not isinstance(threads, list)
+            or not threads
+            or len(threads) > 100
+            or any(not isinstance(item, str) or not item or len(item) > 512 for item in threads)
+        ):
+            raise ValueError('explicit_thread_scope_required')
+        for thread in threads:
+            identity(thread)
+        if len(set(threads)) != len(threads):
+            raise ValueError('native_duplicate_thread')
+        timestamp(config['activation_at'])
+        if 'send_enabled' in config and type(config['send_enabled']) is not bool:
+            raise ValueError('native_send_flag_invalid')
 
     @staticmethod
     def native_validate_change(change):
@@ -56,7 +94,6 @@ class AgentWeChatAdapter(AbstractMessagePlatformAdapter):
                 'consumer_id',
                 'initial_cursor',
                 'activation_at',
-                'endpoint',
                 'send_enabled',
             )
         }

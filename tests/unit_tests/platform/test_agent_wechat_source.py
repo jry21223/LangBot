@@ -358,3 +358,17 @@ async def test_unknown_send_lookup_must_match_exact_target_not_just_any_approved
     with pytest.raises(WxProtocolError, match='send_scope_rejected'):
         await provider.lookup('original-host-key')
     client.send_text.assert_not_called()
+
+
+def test_pure_native_config_validation_rejects_raw_secrets_and_network_overrides():
+    adapter = adapter_fixture()
+    config = dict(adapter.config)
+    adapter.native_validate_config(config)
+    for key, value in [
+        ('token', 'not-a-real-token'),
+        ('secret_file', '/etc/private'),
+        ('endpoint', 'http://unapproved.invalid/v1'),
+        ('send_enabled', 'false'),
+    ]:
+        with pytest.raises(ValueError):
+            adapter.native_validate_config(dict(config, **{key: value}))
