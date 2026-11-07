@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Protocol
+
 from ..api.http.authz import AuthorizationError
 
 
 class NativeAccessDenied(AuthorizationError, PermissionError):
     """A precise native capability denial, rendered as HTTP 403."""
-
-
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Protocol
 
 
 @dataclass(frozen=True)
