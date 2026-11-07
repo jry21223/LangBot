@@ -733,7 +733,7 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
       description: form.getValues().description ?? '',
       adapter: form.getValues().adapter,
       adapter_config: form.getValues().adapter_config,
-      enable: true,
+      enable: isNativeIngress ? (form.getValues('enable') ?? false) : true,
       event_bindings: isNativeIngress
         ? []
         : (form.getValues().event_bindings ?? []),
@@ -745,7 +745,7 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
       .updateBot(initBotId, updateBot)
       .then(() => {
         // Reset dirty baseline to current values so isDirty becomes false
-        form.reset({ ...form.getValues(), enable: true });
+        form.reset({ ...form.getValues(), enable: updateBot.enable });
         onFormSubmit(form.getValues());
         toast.success(t('bots.saveSuccess'));
       })

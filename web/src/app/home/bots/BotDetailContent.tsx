@@ -389,7 +389,7 @@ export default function BotDetailContent({ id }: { id: string }) {
                 data-guide="bot-config-save"
               >
                 {t(
-                  formDirty && !botEnabled
+                  formDirty && !botEnabled && isNativeIngress !== true
                     ? 'bots.saveAndEnable'
                     : 'common.save',
                 )}

@@ -176,8 +176,20 @@ test('native channel can be created using only the existing form', async ({
   expect(draft.adapter_config).toEqual({});
   await expect(page).toHaveURL(/\/home\/bots\?id=bot-1$/);
   for (const [name, label] of fields)
-    await page.getByLabel(label).fill(`fixture-${name}`);
-  await page.getByRole('button', { name: /Save/ }).first().click();
+    await page
+      .getByText(new RegExp(`^${label}\\s*\\*$`))
+      .locator('..')
+      .getByRole('textbox')
+      .fill(`fixture-${name}`);
+  const savedRequest = page.waitForRequest(
+    (request) =>
+      request.method() === 'PUT' &&
+      new URL(request.url()).pathname === '/api/v1/platform/bots/bot-1',
+  );
+  await page.getByRole('button', { name: /^Save$/ }).click();
+  const saved = (await savedRequest).postDataJSON();
+  expect(saved.enable).toBe(false);
+  expect(saved.adapter_config.credential_ref).toBe('fixture-credential_ref');
   await expect(page.locator('[data-guide="bot-routing"]')).toHaveCount(0);
   await expect(page.getByTestId('native-ingress-status')).toBeVisible();
 });
