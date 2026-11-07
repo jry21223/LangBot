@@ -1,6 +1,8 @@
+import { nativeIngressEn as nativeIngress } from './native-ingress';
 import slackSetup from './slack-setup/en-US';
 import pipelineMigration from './pipeline-migration/en-US';
 const enUS = {
+  nativeIngress,
   slackSetup,
   inflight: {
     autoCollapse: 'Auto-collapse',

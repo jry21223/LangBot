@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import EventBindingsEditor from './EventBindingsEditor';
+import NativeIngressStatus from '../native-ingress/NativeIngressStatus';
 import EventRoutingHelp from './EventRoutingHelp';
 import LegacyAdapterHelp from './LegacyAdapterHelp';
 import PluginProcessorBindings from './PluginProcessorBindings';
@@ -205,6 +206,8 @@ interface BotFormProps {
   onNewBotCreated: (botId: string) => void;
   onDirtyChange?: (dirty: boolean) => void;
   onAdapterLabelChange?: (label: string) => void;
+  onNativeIngressChange?: (native: boolean) => void;
+  nativeIngressRuntime?: unknown;
   guideEnabled?: boolean;
 }
 
@@ -215,6 +218,8 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
     onNewBotCreated,
     onDirtyChange,
     onAdapterLabelChange,
+    onNativeIngressChange,
+    nativeIngressRuntime,
     guideEnabled = true,
   },
   ref,
@@ -258,6 +263,10 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
     Record<string, string[]>
   >({});
 
+  const [adapterNativeIngress, setAdapterNativeIngress] = useState<
+    Record<string, boolean>
+  >({});
+
   const [agentNameList, setAgentNameList] = useState<Agent[]>([]);
 
   const [dynamicFormConfigList, setDynamicFormConfigList] = useState<
@@ -272,6 +281,16 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
 
   // Watch adapter and adapter_config for filtering
   const currentAdapter = form.watch('adapter');
+  const isNativeIngress = adapterNativeIngress[currentAdapter] === true;
+  useEffect(() => {
+    if (Object.hasOwn(adapterNativeIngress, currentAdapter))
+      onNativeIngressChange?.(isNativeIngress);
+  }, [
+    currentAdapter,
+    adapterNativeIngress,
+    isNativeIngress,
+    onNativeIngressChange,
+  ]);
   const adapterLabel =
     adapterNameList.find((adapter) => adapter.value === currentAdapter)
       ?.label ?? '';
@@ -416,6 +435,14 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
     setAgentNameList(agentsRes.agents);
 
     const adaptersRes = await httpClient.getAdapters();
+    setAdapterNativeIngress(
+      Object.fromEntries(
+        adaptersRes.adapters.map((item) => [
+          item.name,
+          item.spec.native_ingress === true,
+        ]),
+      ),
+    );
     setAdapterNameList(
       adaptersRes.adapters.map((item) => {
         return {
@@ -636,12 +663,13 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
       });
     }
 
-    steps.push({
-      id: 'routing',
-      target: '[data-guide="bot-routing"]',
-      title: t('guidedTour.bot.routing.title'),
-      description: t('guidedTour.bot.routing.description'),
-    });
+    if (!isNativeIngress)
+      steps.push({
+        id: 'routing',
+        target: '[data-guide="bot-routing"]',
+        title: t('guidedTour.bot.routing.title'),
+        description: t('guidedTour.bot.routing.description'),
+      });
     steps.push({
       id: 'save',
       target: '[data-guide="bot-config-save"]',
@@ -651,6 +679,7 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
     return steps;
   }, [
     adapterHelpLinks,
+    isNativeIngress,
     currentAdapter,
     dynamicFormConfigList,
     supportedConnectionModes.length,
@@ -703,8 +732,12 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
       adapter: form.getValues().adapter,
       adapter_config: form.getValues().adapter_config,
       enable: true,
-      event_bindings: form.getValues().event_bindings ?? [],
-      plugin_processors: form.getValues().plugin_processors ?? [],
+      event_bindings: isNativeIngress
+        ? []
+        : (form.getValues().event_bindings ?? []),
+      plugin_processors: isNativeIngress
+        ? []
+        : (form.getValues().plugin_processors ?? []),
     };
     httpClient
       .updateBot(initBotId, updateBot)
@@ -1253,7 +1286,10 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
           )}
 
           {/* Card 2: Event Routing */}
-          {initBotId && currentAdapter && (
+          {initBotId && isNativeIngress && (
+            <NativeIngressStatus value={nativeIngressRuntime} />
+          )}
+          {initBotId && currentAdapter && !isNativeIngress && (
             <Card
               data-guide="bot-routing"
               className={cn(
