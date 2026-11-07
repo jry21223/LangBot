@@ -16,6 +16,21 @@ pytest_plugins = ['tests.integration.platform.test_native_ingress_contracts']
 owner_server = _owner_server_fixture
 
 
+def owner_expectation(client):
+    return {
+        'kind': 'wechat-owner-v1',
+        'grant': {
+            'source': client.source,
+            'scope': client.scope,
+            'principal': client.operator,
+            'workspace': client.workspace,
+            'agent': client.agent,
+            'revision': client.grant_revision,
+        },
+        'binding': {'account': client.account_id, 'thread': client.thread, 'revision': client.binding_revision},
+    }
+
+
 async def allowed():
     pass
 
@@ -122,27 +137,14 @@ async def test_stable_send_key_unknown_and_needs_review_do_not_resend(manager):
 
 
 @pytest.mark.asyncio
-async def test_real_native_runtime_attaches_wx_client_before_current_source_authorization(manager):
+async def test_default_source_factory_rejects_direct_account_facts_without_owner_audience(manager):
     from types import SimpleNamespace
-    from langbot.pkg.platform.sources.agent_wechat import AgentWeChatAdapter
-    from langbot_plugin.api.definition.abstract.platform.event_logger import AbstractEventLogger
+    from tests.unit_tests.platform.test_agent_wechat_source import adapter_fixture
     from langbot.pkg.platform.native_access import register_native_access
     from langbot.pkg.platform.native_runtime import attach_native_runtime
     from tests.integration.platform.test_native_ingress_contracts import context
 
-    adapter = AgentWeChatAdapter(
-        {
-            'account_id': 'account-1',
-            'allowed_threads': ['group-1'],
-            'source_id': 'fixture',
-            'scope_id': 'scope',
-            'credential_ref': 'existing',
-            'consumer_id': 'consumer',
-            'initial_cursor': '9',
-            'activation_at': '2026-11-08T00:00:00Z',
-        },
-        AsyncMock(spec=AbstractEventLogger),
-    )
+    adapter = adapter_fixture()
     client = AsyncMock()
     client.account_id = 'account-1'
     client.status.return_value = {
@@ -152,10 +154,8 @@ async def test_real_native_runtime_attaches_wx_client_before_current_source_auth
         'connection': 'online',
         'incomingTransport': 'native_push',
     }
-    factory = AsyncMock(return_value=client)
-    ap = SimpleNamespace(persistence_mgr=manager, native_source_client_factory=factory)
-    binding = adapter.native_source_binding()
-    await register_native_access(ap, context(), 'bot-workspace-a', binding, source_enabled=True)
+    ap = SimpleNamespace(persistence_mgr=manager, native_source_client_factory=AsyncMock(return_value=client))
+    await register_native_access(ap, context(), 'bot-workspace-a', adapter.native_source_binding(), source_enabled=True)
     runtime = SimpleNamespace(
         ap=ap,
         adapter=adapter,
@@ -164,20 +164,10 @@ async def test_real_native_runtime_attaches_wx_client_before_current_source_auth
         workspace_uuid='workspace-a',
         assert_execution_active=AsyncMock(),
     )
-    store = await attach_native_runtime(runtime)
-    assert adapter.store is store
-    await adapter._worker().initialize()
-    client.message.return_value = message()
-    client.media.return_value = {'items': []}
-    await adapter.worker.accept_event(event())
-    assert await store.checkpoint() == '10'
-    client.ack.assert_awaited_once_with('consumer', '10')
-    factory.assert_awaited_once_with(runtime.execution_context, 'bot-workspace-a', binding, 'existing')
-    await register_native_access(ap, context(), 'bot-workspace-a', binding, source_enabled=False, expected_revision=1)
-    with pytest.raises(PermissionError):
-        await adapter.native_authority(
-            next(iter(adapter.worker.records)), next(iter(adapter.worker.records.values()))[0]
-        )
+    with pytest.raises(PermissionError, match='source_audience_not_registered'):
+        await attach_native_runtime(runtime)
+    assert adapter.store is None
+    client.message.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -225,83 +215,18 @@ async def test_actual_wx_quarantine_does_not_starve_next_message_or_forge_host_r
 
 
 @pytest.mark.asyncio
-async def test_protected_core_reader_uses_fresh_wx_manifest_bytes_and_current_receiver_grant(manager):
-    from hashlib import sha256
+async def test_core_metadata_reader_cannot_reach_any_original_or_media_provider():
     from types import SimpleNamespace
-    from tests.unit_tests.platform.test_agent_wechat_source import adapter_fixture
-    from tests.integration.platform.test_native_ingress_contracts import context, key_fixture
-    from langbot.pkg.platform.native_access import register_native_access
-    from langbot.pkg.platform.native_runtime import attach_native_runtime
+    from tests.integration.platform.test_native_ingress_contracts import context
+    from langbot.pkg.platform.native_contract import NativeAccessDenied
     from langbot.pkg.platform.native_originals import read_native_original
 
-    adapter = adapter_fixture()
-    client = AsyncMock()
-    client.account_id = 'account-1'
-    client.status.return_value = {
-        'id': 'account-1',
-        'authenticated': True,
-        'contactSyncReady': True,
-        'connection': 'online',
-        'incomingTransport': 'native_push',
-    }
-    data = b'synthetic-media'
-    checksum = sha256(data).hexdigest()
-    client.message.return_value = message(type=3, body=None)
-    client.media.return_value = {
-        'items': [
-            {
-                'id': 'asset-1',
-                'accountId': 'account-1',
-                'messageId': 'msg-1',
-                'kind': 'image',
-                'state': 'available',
-                'sha256': checksum,
-                'byteLength': len(data),
-                'contentType': 'image/png',
-            }
-        ]
-    }
-    client.media_content.return_value = data
-    ap = SimpleNamespace(persistence_mgr=manager, native_source_client_factory=AsyncMock(return_value=client))
-    await key_fixture(manager)
-    binding = adapter.native_source_binding()
-    await register_native_access(
-        ap,
-        context(),
-        'bot-workspace-a',
-        binding,
-        source_enabled=True,
-        receiver_enabled=True,
-        receiver_id='unique-host',
-        receiver_api_key_uuid='dedicated-key',
-    )
-    runtime = SimpleNamespace(
-        ap=ap,
-        adapter=adapter,
-        execution_context=context(),
-        bot_entity=SimpleNamespace(uuid='bot-workspace-a'),
-        workspace_uuid='workspace-a',
-        assert_execution_active=AsyncMock(),
-    )
-    await attach_native_runtime(runtime)
-    ap.platform_mgr = SimpleNamespace(get_bot_by_uuid=AsyncMock(return_value=runtime))
-    await adapter._worker().initialize()
-    await adapter.worker.accept_event(event())
-    ref, (version, _) = next(iter(adapter.worker.records.items()))
-    reader = context(principal_type='api_key', key='dedicated-key', permissions=[])
-    manifest = await read_native_original(ap, reader, 'bot-workspace-a', 'manifest', ref, version)
-    assert manifest['kind'] == 'media' and manifest['assets'][0]['asset_id'] == 'asset-1'
-    result = await read_native_original(ap, reader, 'bot-workspace-a', 'media', ref, version, asset_id='asset-1')
-    assert result['bytes'] == data and result['sha256'] == checksum
-    with pytest.raises(WxProtocolError, match='media_not_available'):
-        await read_native_original(ap, reader, 'bot-workspace-a', 'media', ref, version, asset_id='unknown')
-    before = client.message.await_count
-    await register_native_access(
-        ap, context(), 'bot-workspace-a', binding, source_enabled=True, receiver_enabled=False, expected_revision=1
-    )
-    with pytest.raises(PermissionError):
-        await read_native_original(ap, reader, 'bot-workspace-a', 'media', ref, version, asset_id='asset-1')
-    assert client.message.await_count == before
+    lookup = AsyncMock(side_effect=AssertionError('provider must not be reached'))
+    ap = SimpleNamespace(platform_mgr=SimpleNamespace(get_bot_by_uuid=lookup))
+    for kind, options in [('original', {}), ('chunk', {'part_index': 0}), ('media', {'asset_id': 'asset'})]:
+        with pytest.raises(NativeAccessDenied, match='metadata_reader_originals_forbidden'):
+            await read_native_original(ap, context(), 'bot-workspace-a', kind, 'reference', 'version', **options)
+    lookup.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -368,7 +293,9 @@ async def test_scoped_owner_http_runtime_persists_typed_gaps_and_preserves_indep
     adapter = AgentWeChatAdapter(config, initial.logger)
     ap = SimpleNamespace(persistence_mgr=manager, native_source_client_factory=AsyncMock(return_value=client))
     binding = adapter.native_source_binding()
-    await register_native_access(ap, context(), 'bot-workspace-a', binding, source_enabled=True)
+    await register_native_access(
+        ap, context(), 'bot-workspace-a', binding, source_enabled=True, source_authority=owner_expectation(client)
+    )
     runtime = SimpleNamespace(
         ap=ap,
         adapter=adapter,
@@ -435,3 +362,69 @@ async def test_scoped_owner_http_runtime_persists_typed_gaps_and_preserves_indep
     with pytest.raises(OwnerProtocolError):
         await restarted.poll_once()
     assert await store.checkpoint() == 'owner-after'
+
+
+@pytest.mark.asyncio
+async def test_registered_owner_provider_builds_real_metadata_client_with_default_factory(
+    manager, owner_server, tmp_path
+):
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from tests.integration.platform.test_native_ingress_contracts import context
+    from tests.unit_tests.platform.test_agent_wechat_source import adapter_fixture
+    from langbot.pkg.platform.sources.agent_wechat import AgentWeChatAdapter
+    from langbot.pkg.platform.native_access import register_native_access
+    from langbot.pkg.platform.native_runtime import attach_native_runtime
+    from langbot.pkg.platform.native_clients import NativeClientRegistry
+    from langbot.pkg.platform.adapters.agent_wechat.owner_client import OwnerNativeClient
+
+    profile, _, _, _ = owner_server
+    base = adapter_fixture()
+    config = dict(
+        base.config,
+        source_id=profile.source,
+        scope_id=profile.scope,
+        source_flavor='personal-wechat-native-v1',
+        initial_cursor='owner-before',
+    )
+    config.pop('activation_at')
+    config.pop('consumer_id')
+    adapter = AgentWeChatAdapter(config, base.logger)
+    ap = SimpleNamespace(persistence_mgr=manager)
+    binding = adapter.native_source_binding()
+    await register_native_access(
+        ap, context(), 'bot-workspace-a', binding, source_enabled=True, source_authority=owner_expectation(profile)
+    )
+    credential = tmp_path / 'metadata-reader-key'
+    credential.write_text('synthetic-narrow-reader')
+    credential.chmod(0o600)
+    entries = [
+        {
+            'credential_ref': config['credential_ref'],
+            'workspace_uuid': 'workspace-a',
+            'bot_uuid': 'bot-workspace-a',
+            'binding_sha256': _hash(asdict(binding)),
+            'enabled': True,
+            'provider': 'agent-wechat-owner-v1',
+            'secret_file': credential.name,
+            'endpoint': profile.endpoint,
+        }
+    ]
+    ap.native_source_client_factory = NativeClientRegistry(ap, entries, secret_root=str(tmp_path))
+    runtime = SimpleNamespace(
+        ap=ap,
+        adapter=adapter,
+        execution_context=context(),
+        bot_entity=SimpleNamespace(uuid='bot-workspace-a'),
+        workspace_uuid='workspace-a',
+        assert_execution_active=AsyncMock(),
+    )
+    try:
+        store = await attach_native_runtime(runtime)
+        assert isinstance(adapter.client, OwnerNativeClient) and adapter.client.stage == 'ingest'
+        assert not hasattr(adapter.client, 'native_original') and not hasattr(adapter.client, 'native_media')
+        await adapter._worker().initialize()
+        await adapter.worker.poll_once()
+        assert await store.checkpoint() == 'owner-after'
+    finally:
+        await adapter.kill()

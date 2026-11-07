@@ -143,7 +143,7 @@ class OwnerNativeClient:
         workspace,
         account,
         thread,
-        stage,
+        stage='ingest',
         agent,
         grant_revision,
         binding_revision,
