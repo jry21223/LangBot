@@ -81,6 +81,7 @@ class NativeAccess(Base):
     workspace_uuid = sa.Column(sa.String(36), nullable=False)
     bot_uuid = sa.Column(sa.String(255), nullable=False)
     binding_sha256 = sa.Column(sa.String(64), nullable=False)
+    registration_request_id = sa.Column(sa.String(255), nullable=False)
     registered_by_account_uuid = sa.Column(sa.String(36), nullable=False)
     source_enabled = sa.Column(sa.Boolean, nullable=False, default=False)
     source_revision = sa.Column(sa.Integer, nullable=False, default=1)

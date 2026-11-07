@@ -16,8 +16,19 @@ depends_on = None
 _TABLES = ('native_ingress_sources', 'native_ingress_pages', 'native_ingress_events', 'native_send_operations', 'native_ingress_access')
 
 
+def _create_table(name, *columns):
+    inspector = sa.inspect(op.get_bind())
+    if inspector.has_table(name):
+        expected = {column.name for column in columns if isinstance(column,sa.Column)}
+        actual = {column['name'] for column in inspector.get_columns(name)}
+        if actual != expected:
+            raise RuntimeError('Existing native table does not match the migration contract')
+        return
+    op.create_table(name,*columns)
+
+
 def upgrade():
-    op.create_table(_TABLES[0],
+    _create_table(_TABLES[0],
         sa.Column('id', sa.String(64), primary_key=True),
         sa.Column('workspace_uuid', sa.String(36), sa.ForeignKey('workspaces.uuid'), nullable=False),
         sa.Column('bot_uuid', sa.String(255), nullable=False),
@@ -56,12 +67,13 @@ def upgrade():
                 sa.Column('status', sa.String(24), nullable=False), sa.Column('receipt', sa.JSON, nullable=True)]
         columns.append(sa.ForeignKeyConstraint(['workspace_uuid','source_id'],
             ['native_ingress_sources.workspace_uuid','native_ingress_sources.id']))
-        op.create_table(name, *columns)
-    op.create_table('native_ingress_access',
+        _create_table(name, *columns)
+    _create_table('native_ingress_access',
         sa.Column('id',sa.String(64),primary_key=True),
         sa.Column('workspace_uuid',sa.String(36),nullable=False),
         sa.Column('bot_uuid',sa.String(255),nullable=False),
         sa.Column('binding_sha256',sa.String(64),nullable=False),
+        sa.Column('registration_request_id',sa.String(255),nullable=False),
         sa.Column('registered_by_account_uuid',sa.String(36),nullable=False),
         sa.Column('source_enabled',sa.Boolean,nullable=False,server_default=sa.false()),
         sa.Column('source_revision',sa.Integer,nullable=False,server_default='1'),
@@ -71,8 +83,9 @@ def upgrade():
         sa.Column('receiver_revision',sa.Integer,nullable=False,server_default='1'),
         sa.UniqueConstraint('workspace_uuid','bot_uuid'),
         sa.ForeignKeyConstraint(['workspace_uuid','bot_uuid'],['bots.workspace_uuid','bots.uuid']))
-    op.create_index('ix_native_ingress_events_pending', 'native_ingress_events',
-                    ['workspace_uuid','source_id','status','id'])
+    if 'ix_native_ingress_events_pending' not in {i['name'] for i in sa.inspect(op.get_bind()).get_indexes('native_ingress_events')}:
+        op.create_index('ix_native_ingress_events_pending', 'native_ingress_events',
+                        ['workspace_uuid','source_id','status','id'])
     if op.get_bind().dialect.name == 'postgresql':
         for table in _TABLES:
             op.execute(sa.text(f'ALTER TABLE {table} ENABLE ROW LEVEL SECURITY'))

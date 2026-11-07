@@ -49,6 +49,13 @@ async def attach_native_runtime(runtime):
     if not callable(factory):
         raise NativeAccessDenied("native_source_authorizer_not_configured")
     binding = runtime.adapter.native_source_binding()
+    if getattr(runtime.adapter, 'native_client_required', False):
+        client_factory = getattr(runtime.ap, 'native_source_client_factory', None)
+        if not callable(client_factory):
+            raise NativeAccessDenied('native_source_client_not_configured')
+        credential_ref = runtime.adapter.native_credential_ref()
+        client = await client_factory(runtime.execution_context, runtime.bot_entity.uuid, binding, credential_ref)
+        runtime.adapter.attach_native_client(client)
     authorize_source = await factory(runtime.execution_context, runtime.bot_entity.uuid, binding, runtime.adapter)
     if not callable(authorize_source):
         raise NativeAccessDenied('native_source_authorizer_invalid')
@@ -58,9 +65,12 @@ async def attach_native_runtime(runtime):
         await authorize_source()
 
     await authorize()
+    validator = getattr(runtime.adapter,'native_validate_change',None)
+    if not callable(validator):
+        raise NativeAccessDenied('native_source_validator_required')
     store = NativeIngressStore(runtime.ap.persistence_mgr, workspace_uuid=runtime.workspace_uuid,
                                bot_uuid=runtime.bot_entity.uuid, binding=binding,
-                               authorization_fence=getattr(authorize_source,"native_fence",None))
+                               authorization_fence=getattr(authorize_source,"native_fence",None), change_validator=validator)
     # initialize is adapter-owned because its initial source cursor must be
     # explicit, persisted, and included in the immutable configuration revision.
     runtime.adapter.attach_native_ingress(store, authorize)
