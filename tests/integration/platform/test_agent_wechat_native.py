@@ -9,9 +9,11 @@ from langbot.pkg.platform.native_contract import SourceBinding
 from langbot.pkg.platform.native_ingress import NativeIngressStore, _hash
 from langbot.pkg.platform.adapters.agent_wechat.source import WxNativeSource
 from langbot.pkg.platform.adapters.agent_wechat.client import WxProtocolError
+from tests.unit_tests.platform.test_agent_wechat_owner_client import owner_server as _owner_server_fixture
 
 
 pytest_plugins = ['tests.integration.platform.test_native_ingress_contracts']
+owner_server = _owner_server_fixture
 
 
 async def allowed():
@@ -313,12 +315,10 @@ async def test_owner_canonical_pages_persist_legacy_refs_and_derived_versions_wi
     pending = owner_change(sequence=101, state='PENDING')
     complete = owner_change(sequence=102, version='e' * 64)
     page = OwnerPage('owner-before', 'owner-after', (pending, complete), True)
-    ack = AsyncMock()
     await accept_owner_page(
         store,
         page,
         authorize=allowed,
-        acknowledge=ack,
         previous_sequence=100,
         source='existing-wechat',
         scope='existing-scope',
@@ -334,4 +334,100 @@ async def test_owner_canonical_pages_persist_legacy_refs_and_derived_versions_wi
     ]
     assert all(row['envelope']['payload']['event_cursor'] == 'opaque-wx-cursor' for row in rows['items'])
     assert [row['envelope']['payload']['change']['sequence'] for row in rows['items']] == [101, 102]
-    ack.assert_awaited_once()
+    assert await store.checkpoint() == 'owner-after'
+
+
+@pytest.mark.asyncio
+async def test_scoped_owner_http_runtime_persists_typed_gaps_and_preserves_independent_owner_progress(
+    manager, owner_server
+):
+    from types import SimpleNamespace
+    from tests.integration.platform.test_native_ingress_contracts import context
+    from tests.unit_tests.platform.test_agent_wechat_source import adapter_fixture
+    from langbot.pkg.platform.sources.agent_wechat import AgentWeChatAdapter
+    from langbot.pkg.platform.native_access import register_native_access
+    from langbot.pkg.platform.native_runtime import attach_native_runtime
+    from langbot.pkg.platform.native_contract import NativeAccessDenied
+    from langbot.pkg.platform.adapters.agent_wechat.owner_client import OwnerProtocolError
+    from langbot.pkg.platform.adapters.agent_wechat.owner_source import OwnerNativeSource
+
+    client, page, authority, requests = owner_server
+    # The owner profile audience is explicit; it is not fabricated from Core's Workspace ID.
+    client.workspace = 'actual-source-profile-audience'
+    authority['grant']['workspace'] = client.workspace
+    initial = adapter_fixture()
+    config = dict(
+        initial.config,
+        source_id='existing-wechat',
+        scope_id='existing-scope',
+        source_flavor='personal-wechat-native-v1',
+        initial_cursor='owner-before',
+    )
+    config.pop('activation_at')
+    config.pop('consumer_id')
+    adapter = AgentWeChatAdapter(config, initial.logger)
+    ap = SimpleNamespace(persistence_mgr=manager, native_source_client_factory=AsyncMock(return_value=client))
+    binding = adapter.native_source_binding()
+    await register_native_access(ap, context(), 'bot-workspace-a', binding, source_enabled=True)
+    runtime = SimpleNamespace(
+        ap=ap,
+        adapter=adapter,
+        execution_context=context(),
+        bot_entity=SimpleNamespace(uuid='bot-workspace-a'),
+        workspace_uuid='workspace-a',
+        assert_execution_active=AsyncMock(),
+    )
+    store = await attach_native_runtime(runtime)
+    worker = adapter._worker()
+    assert isinstance(worker, OwnerNativeSource)
+    assert binding.read_only is True
+    await worker.initialize()
+    assert adapter.native_runtime_state()['state'] != 'connected'
+    unresolved = {
+        'event_id': 'owner-unresolved-1',
+        'kind': 'unresolved',
+        'source_sequence': 100,
+        'event_cursor': 'raw-wx-cursor',
+        'reason': 'native_unresolved',
+        'source': 'existing-wechat',
+        'scope': 'existing-scope',
+    }
+    page['items'].insert(0, unresolved)
+    page['gaps'] = ['original_unavailable']
+    await worker.poll_once()
+    assert adapter.native_runtime_state() == {'state': 'unknown', 'error_code': 'upstream_state_unverified'}
+    assert await store.checkpoint() == 'owner-after'
+    assert await store.source_sequence_checkpoint() == 101
+    rows = await store.accepted_events(authorize=runtime.native_source_authorize)
+    assert len(rows['items']) == 1
+    envelope = rows['items'][0]['envelope']
+    assert envelope['payload']['owner_event_id'] == 'owner-event-1'
+    assert envelope['reference'] == page['items'][1]['change']['original']
+    feed = await store.read_router_page('0', authorize=runtime.native_source_authorize)
+    assert len(feed['items']) == 1 and {gap['reason'] for gap in feed['gaps']} == {
+        'native_unresolved',
+        'owner_source_gap',
+    }
+    for gap in feed['gaps']:
+        required = {'event_id', 'reason', 'source', 'scope'}
+        if gap['reason'] == 'owner_source_gap':
+            assert gap['code'] == 'original_unavailable'
+            required.add('code')
+        assert set(gap) == required
+    # Reopen using only the persisted owner sequence/cursor, with no wx read or ACK.
+    restarted = OwnerNativeSource(client, store, runtime.native_source_authorize, initial_cursor='owner-before')
+    await restarted.initialize()
+    assert restarted.last_sequence == 101
+    page.update(previous_cursor='owner-after', next_cursor='owner-after', items=[], gaps=[])
+    assert await restarted.poll_once() is None
+    for method in ('native_original', 'native_original_manifest', 'native_media'):
+        with pytest.raises(NativeAccessDenied, match='metadata_reader_only'):
+            await getattr(adapter, method)(
+                *(['reference', 'version', 'asset'] if method == 'native_media' else ['reference', 'version'])
+            )
+    assert all(request[0] == 'GET' for request in requests)
+    assert {request[1] for request in requests} == {'/native/authority', '/native/changes'}
+    authority['grant']['active'] = False
+    with pytest.raises(OwnerProtocolError):
+        await restarted.poll_once()
+    assert await store.checkpoint() == 'owner-after'

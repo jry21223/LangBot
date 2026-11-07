@@ -163,6 +163,16 @@ def test_native_manifest_is_discoverable_by_existing_core_ui_contract():
     info = component.to_plain_dict()
     assert info['label']['zh_Hans'] == '个人微信'
     assert info['label']['en_US'] == 'Personal WeChat'
+    assert info['spec'].get('legacy') is False
+    assert {field['name'] for field in info['spec']['config']} == {
+        'source_flavor',
+        'credential_ref',
+        'account_id',
+        'allowed_threads',
+        'source_id',
+        'scope_id',
+        'initial_cursor',
+    }
     fields = {field['name']: field for field in info['spec']['config']}
     assert fields['allowed_threads']['type'] == 'array[string]'
     assert 'token' not in fields

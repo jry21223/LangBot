@@ -53,7 +53,7 @@ async def owner_server():
         assert request.headers['X-Operator'] == 'metadata-reader'
         assert request.query['source'] == 'existing-wechat'
         assert request.query['scope'] == 'existing-scope'
-        assert request.query['workspace'] == 'workspace-a'
+        assert request.query['workspace'] == client.workspace
         if request.path == '/native/changes':
             return web.json_response(page)
         if request.path == '/native/authority':
@@ -76,7 +76,7 @@ async def owner_server():
         workspace='workspace-a',
         account='account-1',
         thread='group-1',
-        stage='metadata',
+        stage='ingest',
         agent='metadata-agent',
         grant_revision='grant-r1',
         binding_revision='binding-r1',
@@ -191,3 +191,68 @@ async def test_old_source_gap_labels_are_not_silently_inherited_by_native_flavor
         page['gaps'] = [gap]
         with pytest.raises(OwnerProtocolError):
             await client.native_changes(cursor='owner-before')
+
+
+@pytest.mark.asyncio
+async def test_optional_collector_is_fresh_evidence_not_grant_or_http_success(owner_server):
+    from datetime import datetime, timezone, timedelta
+
+    client, _, authority, _ = owner_server
+    await client.native_authority()
+    assert client.upstream_state() == 'unknown'
+    collector = {
+        'account': 'account-1',
+        'authenticated': True,
+        'connection': 'online',
+        'incoming_transport': 'native_push',
+        'contact_sync_ready': True,
+        'observed_at': datetime.now(timezone.utc).isoformat(),
+    }
+    authority['collector'] = collector
+    await client.native_authority()
+    assert client.upstream_state() == 'connected'
+    for update in [
+        {
+            'authenticated': False,
+            'connection': 'disconnected',
+            'incoming_transport': 'disconnected',
+            'contact_sync_ready': False,
+        },
+        {'connection': 'reconnecting'},
+        {'incoming_transport': 'heartbeat_polling'},
+        {'contact_sync_ready': False},
+        {'incoming_transport': 'simulator_push'},
+        {'account': 'other'},
+        {'observed_at': (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()},
+        {'observed_at': 'no-timezone'},
+        {'authenticated': {'token': 'no'}},
+    ]:
+        authority['collector'] = dict(collector, **update)
+        await client.native_authority()
+        assert client.upstream_state() != 'connected'
+    authority['collector'] = {'token': 'must-not-escape'}
+    proof = await client.native_authority()
+    assert 'collector' not in proof and client.upstream_state() == 'unknown'
+
+
+@pytest.mark.asyncio
+async def test_global_generation_change_is_not_an_owner_version_or_fresh_read_barrier(owner_server):
+    client, page, authority, _ = owner_server
+    historical = await client.native_changes(cursor='owner-before')
+    change = page['items'][0]['change']
+    authority['original'] = {
+        'reference': change['original'],
+        'version': change['version'],
+        'native_version': 'different-global-generation-from-fresh-snapshot',
+        'recalled': False,
+        'available': True,
+        'dispatch_eligible': True,
+        'input_hash': 'c' * 64,
+        'parser_version': 'parser-v1',
+        'result_sha256': 'd' * 64,
+    }
+    current = await client.native_authority(reference=change['original'], version=change['version'])
+    assert current['original']['version'] == historical['items'][0]['change']['version']
+    assert current['original']['native_version'] != historical['items'][0]['native_version']
+    assert page['items'][0]['native_version'] == 'wx-version'
+    assert historical['items'][0]['native_version'] == 'wx-version'

@@ -74,8 +74,6 @@ class OwnerMetadataClient(Protocol):
 
     async def read_metadata_page(self, cursor: str, limit: int) -> OwnerPage: ...
 
-    async def acknowledge_metadata(self, page: OwnerPage, durable_receipt) -> None: ...
-
 
 def _checked(item, contract):
     if not isinstance(contract, OwnerContract) or not isinstance(item, OwnerChange) or item.contract != contract.name:
@@ -175,9 +173,8 @@ def require_current_original(item, *, reference, version, contract=LEGACY_TEXT):
         raise ValueError('owner_original_not_complete')
 
 
-async def accept_owner_page(store, page, *, authorize, acknowledge, previous_sequence, **binding):
+async def accept_owner_page(store, page, *, authorize, previous_sequence, **binding):
     source_page = owner_source_page(page, previous_sequence=previous_sequence, **binding)
     receipt = await store.accept_page(source_page, authorize=authorize)
-    await authorize()
-    await acknowledge(page, receipt)
+    # The fixed owner feed is read-only. Only the Core checkpoint advances.
     return receipt

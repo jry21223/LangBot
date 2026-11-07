@@ -7,6 +7,7 @@ network route.
 """
 
 from copy import deepcopy
+from datetime import datetime, timezone
 import asyncio
 import json
 import re
@@ -84,6 +85,33 @@ def _media(items):
             raise OwnerProtocolError('owner_available_media_integrity_required')
 
 
+def _collector(value, account):
+    fields = {'account', 'authenticated', 'connection', 'incoming_transport', 'contact_sync_ready', 'observed_at'}
+    if not isinstance(value, dict) or set(value) != fields or value['account'] != account:
+        return None
+    if type(value['authenticated']) is not bool or type(value['contact_sync_ready']) is not bool:
+        return None
+    if (
+        not isinstance(value['connection'], str)
+        or value['connection'] not in {'online', 'reconnecting', 'disconnected'}
+        or not isinstance(value['incoming_transport'], str)
+        or value['incoming_transport'] not in {'native_push', 'heartbeat_polling', 'disconnected'}
+    ):
+        return None
+    try:
+        if not isinstance(value['observed_at'], str):
+            return None
+        observed = datetime.fromisoformat(value['observed_at'].replace('Z', '+00:00'))
+        if observed.tzinfo is None:
+            return None
+        age = (datetime.now(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds()
+        if not -5 <= age <= 30:
+            return None
+    except (ValueError, OverflowError):
+        return None
+    return deepcopy(value)
+
+
 class OwnerNativeClient:
     metadata_only = True
 
@@ -120,12 +148,15 @@ class OwnerNativeClient:
         self.endpoint, self._credential = endpoint.rstrip('/'), _id(credential)
         self.operator, self.source, self.scope = _id(operator), _id(source), _id(scope)
         self.workspace, self.account_id, self.thread = _id(workspace), _id(account), _id(thread)
-        self.stage, self.agent = _id(stage), None if agent is None else _id(agent)
+        if stage != 'ingest':
+            raise OwnerProtocolError('owner_metadata_ingest_stage_required')
+        self.stage, self.agent = 'ingest', None if agent is None else _id(agent)
         self.grant_revision, self.binding_revision = _id(grant_revision), _id(binding_revision)
         if contract is not NATIVE_V1:
             raise OwnerProtocolError('owner_contract_not_registered')
         self.contract = contract
         self._session = None
+        self.collector = None
 
     async def close(self):
         if self._session is not None:
@@ -168,7 +199,22 @@ class OwnerNativeClient:
         except (json.JSONDecodeError, UnicodeError):
             raise OwnerProtocolError('owner_response_invalid') from None
 
+    def upstream_state(self):
+        current = _collector(self.collector, self.account_id)
+        if current is None:
+            return 'unknown'
+        if not current['authenticated'] or current['connection'] == 'disconnected':
+            return 'disconnected'
+        if (
+            current['connection'] == 'online'
+            and current['incoming_transport'] == 'native_push'
+            and current['contact_sync_ready']
+        ):
+            return 'connected'
+        return 'awaiting_upstream'
+
     async def native_authority(self, *, reference=None, version=None):
+        self.collector = None
         if (reference is None) != (version is None):
             raise OwnerProtocolError('owner_exact_version_required')
         query = {'stage': self.stage, 'audience_workspace': self.workspace}
@@ -177,7 +223,7 @@ class OwnerNativeClient:
         if reference is not None:
             query.update(reference=_id(reference), version=_id(version))
         result = await self._get('authority', query)
-        if set(result) - {'grant', 'binding', 'original'} or not {'grant', 'binding'} <= set(result):
+        if set(result) - {'grant', 'binding', 'original', 'collector'} or not {'grant', 'binding'} <= set(result):
             raise OwnerProtocolError('owner_authority_schema_invalid')
         grant, binding = result['grant'], result['binding']
         if not isinstance(grant, dict) or set(grant) != {
@@ -233,6 +279,10 @@ class OwnerNativeClient:
                 _id(original['parser_version'])
         elif 'original' in result:
             raise OwnerProtocolError('owner_unrequested_original')
+        self.collector = _collector(result.get('collector'), self.account_id)
+        result.pop('collector', None)
+        if self.collector is not None:
+            result['collector'] = deepcopy(self.collector)
         return deepcopy(result)
 
     async def native_changes(self, *, cursor=None, limit=100):

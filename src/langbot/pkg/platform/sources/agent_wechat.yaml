@@ -9,8 +9,15 @@ metadata:
     en_US: Native Agent WeChat input using an existing account and approved scope.
     zh_Hans: 复用现有账号与获准范围的原生个人微信入口。
 spec:
-  legacy: true
+  legacy: false
   config:
+    - name: source_flavor
+      label:
+        en_US: Owner source contract
+        zh_Hans: 原来源版本合同
+      type: string
+      required: true
+      default: "personal-wechat-native-v1"
     - name: credential_ref
       label:
         en_US: Existing credential reference
@@ -46,24 +53,10 @@ spec:
       type: string
       required: true
       default: ""
-    - name: consumer_id
-      label:
-        en_US: Consumer ID
-        zh_Hans: 消费方 ID
-      type: string
-      required: true
-      default: ""
     - name: initial_cursor
       label:
         en_US: Initial consumer cursor
         zh_Hans: 初始消费位置
-      type: string
-      required: true
-      default: ""
-    - name: activation_at
-      label:
-        en_US: Activation timestamp
-        zh_Hans: 启用时间（含时区）
       type: string
       required: true
       default: ""

@@ -172,8 +172,8 @@ def test_unknown_contract_incomplete_page_and_wrong_scope_fail_closed():
 
 
 @pytest.mark.asyncio
-async def test_owner_ack_occurs_only_after_core_commit_and_never_on_failure():
-    store, authorize, acknowledge = AsyncMock(), AsyncMock(), AsyncMock()
+async def test_owner_consumption_has_only_core_checkpoint_and_no_external_ack():
+    store, authorize = AsyncMock(), AsyncMock()
     item = owner_change()
     page = OwnerPage('before', 'after', (item,), True)
     store.accept_page.side_effect = RuntimeError('db not committed')
@@ -182,7 +182,6 @@ async def test_owner_ack_occurs_only_after_core_commit_and_never_on_failure():
             store,
             page,
             authorize=authorize,
-            acknowledge=acknowledge,
             previous_sequence=100,
             source='existing-wechat',
             scope='existing-scope',
@@ -190,13 +189,11 @@ async def test_owner_ack_occurs_only_after_core_commit_and_never_on_failure():
             thread='group-1',
             contract=FIXTURE_CONTRACT,
         )
-    acknowledge.assert_not_awaited()
     store.accept_page.side_effect = None
     await accept_owner_page(
         store,
         page,
         authorize=authorize,
-        acknowledge=acknowledge,
         previous_sequence=100,
         source='existing-wechat',
         scope='existing-scope',
@@ -204,7 +201,7 @@ async def test_owner_ack_occurs_only_after_core_commit_and_never_on_failure():
         thread='group-1',
         contract=FIXTURE_CONTRACT,
     )
-    acknowledge.assert_awaited_once_with(page, store.accept_page.return_value)
+    assert store.accept_page.await_count == 2
 
 
 def test_complete_or_reparsed_result_cannot_reuse_pending_owner_version_in_one_page():
