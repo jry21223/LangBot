@@ -226,3 +226,18 @@ are not rewritten. Embedding and rerank models are not eligible.
 ### Reset a bot session context
 
 Use `reset_session_context(bot_id, session_id)` only when a user asks to start a session afresh. It requires `resource.manage`, preserves monitoring records, and refuses sessions with active tasks. It clears conversation runner state and excludes earlier transcript entries from subsequent model context. Files and long-term memory are not removed.
+
+## Native source handoff
+
+`read_native_router_page`, `ack_native_router_page`, and
+`lookup_native_router_receipt` mirror `/api/v1/native-ingress/<bot_uuid>/router/`.
+They require normal Workspace authorization **and** a specifically registered
+receiver principal for that source/bot/revision. A resource administrator is not
+implicitly a Router receiver. Missing registration is denied by default.
+
+The single existing Router Host persists its candidate and coverage transaction
+before acknowledging a frozen page. Compare each returned durable receipt before
+clearing the Host's pending acknowledgement. A null lookup is pending/unknown;
+never invent acceptance or resend business actions. These are source producer
+receipts, not execution or delivery success. Do not enable a second consumer or
+forward source content through the ordinary LangBot pipeline in parallel.

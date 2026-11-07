@@ -13,7 +13,7 @@ import json
 import sqlalchemy as sa
 
 from ..entity.persistence.native_ingress import NativeEvent, NativePage, NativeSend, NativeSource
-from .native_contract import AcceptanceReceipt, Authorize, SendProvider, SourceBinding, SourcePage
+from .native_contract import NativeAccessDenied, AcceptanceReceipt, Authorize, SendProvider, SourceBinding, SourcePage
 
 
 def _json(value):
@@ -48,10 +48,12 @@ def _metadata(value):
 
 
 class NativeIngressStore:
-    def __init__(self, manager, *, workspace_uuid: str, bot_uuid: str, binding: SourceBinding):
+    def __init__(self, manager, *, workspace_uuid: str, bot_uuid: str, binding: SourceBinding, authorization_fence=None):
         self.manager = manager
         self.workspace_uuid = _identifier(workspace_uuid)
         self.bot_uuid = _identifier(bot_uuid)
+        self.authorization_fence = authorization_fence
+        self.receiver_id = getattr(authorization_fence, "receiver_id", None)
         self.binding = binding
         if not isinstance(binding, SourceBinding) or type(binding.read_only) is not bool:
             raise ValueError('native_binding_invalid')
@@ -69,11 +71,17 @@ class NativeIngressStore:
         row = await session.get(NativeSource, self.source_id)
         if row is None or row.workspace_uuid != self.workspace_uuid or row.binding_sha256 != self.binding_hash:
             raise ValueError('native_binding_missing_or_changed')
+        if self.authorization_fence is not None:
+            from .native_access import check_fence
+            await check_fence(session, self, self.authorization_fence)
         return row
 
     async def initialize(self, initial_cursor: str | None = None):
         _identifier(initial_cursor, optional=True)
         async with self._own_transaction() as uow:
+            if self.authorization_fence is not None:
+                from .native_access import check_fence
+                await check_fence(uow.session, self, self.authorization_fence)
             source = await uow.session.get(NativeSource, self.source_id)
             if source is None:
                 uow.session.add(NativeSource(id=self.source_id, workspace_uuid=self.workspace_uuid,
@@ -210,22 +218,24 @@ class NativeIngressStore:
             raise ValueError('native_router_page_changed')
         return dict(value, page_sha256=page.fingerprint)
 
-    async def read_router_page(self, cursor: str, limit=100, *, authorize: Authorize):
+    async def read_router_page(self, cursor: str | None = None, limit=100, *, authorize: Authorize):
         """Reserve one immutable metadata page for the existing unique Host.
 
         Cursor belongs only to this downstream feed. Source consumer watermarks
         are never reused here. All source states travel, including tombstones.
         """
         self._limit(limit)
-        if not isinstance(cursor, str) or not cursor.isascii() or not cursor.isdigit() or str(int(cursor)) != cursor:
+        if cursor is not None and (not isinstance(cursor, str) or not cursor.isascii() or not cursor.isdigit() or str(int(cursor)) != cursor):
             raise ValueError('native_router_cursor_invalid')
-        position = int(cursor)
+        position = int(cursor) if cursor is not None else 0
         await authorize()
         async with self._own_transaction() as uow:
             session = uow.session
             source = await self._source(session)
             if source.router_pending_page:
                 page = await session.get(NativePage, source.router_pending_page)
+                if page.receiver_id != self.receiver_id:
+                    raise NativeAccessDenied("native_router_receiver_mismatch")
                 if page.previous_cursor != cursor:
                     raise ValueError('native_router_ack_pending')
                 return await self._router_page_value(session, page)
@@ -234,8 +244,8 @@ class NativeIngressStore:
             rows = (await session.execute(sa.select(NativeEvent).where(
                 NativeEvent.source_id == self.source_id, NativeEvent.position > position,
             ).order_by(NativeEvent.position).limit(limit))).scalars().all()
-            next_cursor = str(rows[-1].position) if rows else cursor
-            page_id = _hash([self.source_id, 'router', cursor, next_cursor])
+            next_cursor = str(rows[-1].position) if rows else str(position)
+            page_id = _hash([self.source_id, 'router', self.receiver_id, cursor, next_cursor])
             value = dict(page_id=page_id, source=self.binding.source, scope=self.binding.scope,
                          complete_page=True, previous_cursor=cursor, next_cursor=next_cursor,
                          gaps=[], items=[dict(event_id=r.id, envelope=self._router_change(r)) for r in rows])
@@ -249,7 +259,7 @@ class NativeIngressStore:
                 if changed.rowcount != 1:
                     raise ValueError('native_router_page_race')
                 session.add(NativePage(id=page_id, workspace_uuid=self.workspace_uuid,
-                    source_id=self.source_id, direction='router', previous_cursor=cursor,
+                    source_id=self.source_id, direction='router', receiver_id=self.receiver_id, previous_cursor=cursor,
                     cursor=next_cursor, fingerprint=fingerprint, event_ids=[r.id for r in rows]))
         return dict(value, page_sha256=fingerprint)
 
@@ -264,7 +274,7 @@ class NativeIngressStore:
             session = uow.session
             source = await self._source(session)
             page = await session.get(NativePage, page_id)
-            if page is None or page.source_id != self.source_id or page.direction != 'router' or page.fingerprint != page_sha256:
+            if page is None or page.source_id != self.source_id or page.direction != 'router' or page.fingerprint != page_sha256 or page.receiver_id != self.receiver_id:
                 raise ValueError('native_router_page_unknown')
             if len(receipts) != len(page.event_ids) or len({r.get('event_id') for r in receipts if isinstance(r, dict)}) != len(receipts):
                 raise ValueError('native_router_receipts_incomplete')
@@ -278,11 +288,14 @@ class NativeIngressStore:
                                 record=event.envelope['record'], version=event.envelope['version'], status='accepted')
                 if set(receipt) != set(expected) | {'receipt_id'} or any(receipt[k] != v for k, v in expected.items()):
                     raise ValueError('native_router_receipt_identity_invalid')
-                _identifier(receipt['receipt_id'])
+                expected_receipt_id = _hash(['langbot-router-receipt-v1', self.binding.source,
+                                             event.envelope['record'], event.envelope['version']])
+                if receipt['receipt_id'] != expected_receipt_id:
+                    raise ValueError('native_router_receipt_id_invalid')
                 if event.receiver_receipt is not None and event.receiver_receipt != receipt:
                     raise ValueError('native_router_receipt_conflict')
                 event.receiver_receipt = receipt
-            if source.router_pending_page == page_id and source.router_cursor == int(page.previous_cursor):
+            if source.router_pending_page == page_id and source.router_cursor == (int(page.previous_cursor) if page.previous_cursor is not None else 0):
                 source.router_cursor = int(page.cursor)
                 source.router_pending_page = None
             elif source.router_cursor < int(page.cursor):
@@ -296,8 +309,8 @@ class NativeIngressStore:
             await self._source(uow.session)
             event = await uow.session.get(NativeEvent, event_id)
             if event is None or event.source_id != self.source_id:
-                return dict(status='unknown', event_id=event_id)
-            return event.receiver_receipt or dict(status='pending', event_id=event_id)
+                return None
+            return event.receiver_receipt
 
     async def send(self, operation_id, target_type, target_id, payload, *, provider: SendProvider, authorize: Authorize):
         """A host-owned operation ID survives crashes and UNKNOWN lookup.
