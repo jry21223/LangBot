@@ -138,3 +138,12 @@ rejected a secret before persistence.
 
 No test here demonstrates a deployed service, current real-account grant,
 working parsing worker, or authorized end-to-end business delivery.
+
+
+The WeCom service credential gate is not satisfied by the absence of original
+hooks. Before enabling a real client, the owner must enforce a route-level
+metadata allowlist for its approved binding, authority, changes and descriptor
+reads, with body/original/manifest/chunk reads denied (HTTP 403). The older
+OpenAgents full-reader credential must not be borrowed or relabeled as a
+metadata-only credential. This boundary has not been demonstrated by the UI
+fixtures or by installing the adapter.
