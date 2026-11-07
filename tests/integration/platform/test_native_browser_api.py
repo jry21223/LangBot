@@ -31,6 +31,10 @@ async def test_actual_native_create_edit_register_enable_record_and_revoke(tmp_p
         assert snapshot['state']=='source_available'
         assert snapshot['counts']['source_events']==1 and snapshot['counts']['router_accepted']==0
         assert snapshot['records'][0]['stage']=='source_accepted'
+        assert (await client.post('/__fixture/upstream-unknown/'+created['uuid'])).status_code==200
+        snapshot=(await request('GET',path))['bot']['adapter_runtime_values']['native_ingress']
+        assert snapshot['state']=='unknown' and snapshot['error_code']=='upstream_state_unverified'
+        assert snapshot['counts']['source_events']==1 and snapshot['records'][0]['stage']=='source_accepted'
         await client.post('/__fixture/revoke-observer/'+created['uuid'])
         snapshot=(await request('GET',path))['bot']['adapter_runtime_values']['native_ingress']
         assert snapshot['state']=='needs_authorization' and 'records' not in snapshot and 'counts' not in snapshot

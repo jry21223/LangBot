@@ -109,8 +109,9 @@ async def native_browser_fixture(tmp_path):
             facts = dict(source=binding.source, account=binding.account, scope=binding.scope, revision=binding.revision,
                          authority_proof=proof)
             async def current_facts(): return facts
+            runtime_state = dict(state='source_available', collector_verified=False)
             adapter = SimpleNamespace(native_connection_facts=current_facts,
-                native_runtime_state=lambda: dict(state='source_available', collector_verified=False))
+                native_runtime_state=lambda: dict(runtime_state))
             authorize = await NativeAuthorization(ap).source_factory(persona, bot_uuid, binding, adapter)
             store = NativeIngressStore(manager, workspace_uuid='workspace-a', bot_uuid=bot_uuid,
                                        binding=binding, authorization_fence=authorize.native_fence)
@@ -123,9 +124,18 @@ async def native_browser_fixture(tmp_path):
             )),authorize=authorize)
             runtime = SimpleNamespace(workspace_uuid='workspace-a', native_ingress_store=store,
                 native_source_authorize=authorize, adapter=adapter, run=AsyncMock(),
-                logger=SimpleNamespace(get_logs=AsyncMock(return_value=([],0))), fixture_source_facts=facts)
+                logger=SimpleNamespace(get_logs=AsyncMock(return_value=([],0))), fixture_source_facts=facts,
+                fixture_runtime_state=runtime_state)
             prepared[bot_uuid] = runtime
         return quart.jsonify(registered=True, records=1, business_execution=False)
+
+    @web.post('/__fixture/upstream-unknown/<bot_uuid>')
+    async def unknown_upstream(bot_uuid):
+        runtime=prepared.get(bot_uuid)
+        if runtime is None or active.get(bot_uuid) is not runtime:
+            return quart.jsonify(error='fixture_requires_registered_active_bot'),409
+        runtime.fixture_runtime_state.update(state='unknown',error_code='upstream_state_unverified',collector_verified=False)
+        return quart.jsonify(upstream_state='unknown',audience_changed=False)
 
     @web.post('/__fixture/revoke-observer/<bot_uuid>')
     async def revoke(bot_uuid):
