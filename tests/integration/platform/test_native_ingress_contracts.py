@@ -67,7 +67,7 @@ async def test_page_receipt_replays_after_restart_without_duplicate_events(manag
 
 def router_event(record='native-1', *, version='v1', kind='created', eligible=True):
     change = dict(source='test-source', scope='chat-a', record=record, version=version,
-                  sequence=1, kind=kind, business_at='2026-11-08T00:00:00Z',
+                  sequence=max(int(record.rsplit('-',1)[-1]) if record.rsplit('-',1)[-1].isdigit() else 1, int(version[1:]) if version[1:].isdigit() else 1), kind=kind, business_at='2026-11-08T00:00:00Z',
                   observed_at='2026-11-08T00:00:01Z', original='source:message/'+record+'/'+version,
                   projection_hash='a'*64, goal_reference=None, saved={})
     return SourceEnvelope(record, version, change['original'], kind,
@@ -183,7 +183,7 @@ async def test_invalid_page_rolls_back_events_and_cursor(manager):
     await ingress.accept_page(SourcePage('10','11',(event(),)),authorize=allowed)
     changed = router_event()
     changed.payload['origin'] = 'catchup'
-    with pytest.raises(ValueError, match='version_conflict'):
+    with pytest.raises(ValueError, match='version_conflict|sequence_conflict'):
         await ingress.accept_page(SourcePage('11','12',(event('native-2'),changed)),authorize=allowed)
     assert await ingress.checkpoint() == '11'
     assert len((await ingress.accepted_events(authorize=allowed))['items']) == 1
@@ -626,7 +626,7 @@ async def test_migration_rejects_same_columns_without_required_constraints(tmp_p
             await conn.run_sync(lambda c: Base.metadata.create_all(c,tables=[User.__table__,Workspace.__table__,Bot.__table__]))
             await conn.exec_driver_sql('''CREATE TABLE native_ingress_sources (
                 id VARCHAR(64) PRIMARY KEY NOT NULL,workspace_uuid VARCHAR(36) NOT NULL,bot_uuid VARCHAR(255) NOT NULL,
-                binding JSON NOT NULL,binding_sha256 VARCHAR(64) NOT NULL,cursor TEXT,last_source_sequence BIGINT,
+                binding JSON NOT NULL,binding_sha256 VARCHAR(64) NOT NULL,cursor TEXT,owner_frame_sequences BOOLEAN NOT NULL DEFAULT 0,last_source_sequence BIGINT,
                 position INTEGER NOT NULL DEFAULT 0,router_cursor INTEGER NOT NULL DEFAULT 0,router_pending_page VARCHAR(64))''')
         await run_alembic_stamp(engine,'0037_metadata_text')
         with pytest.raises(RuntimeError,match='exact type, nullability'):
@@ -645,7 +645,7 @@ async def test_migration_rejects_unapproved_cascade_on_otherwise_matching_native
             await conn.run_sync(lambda c: Base.metadata.create_all(c,tables=[User.__table__,Workspace.__table__,Bot.__table__]))
             await conn.exec_driver_sql('''CREATE TABLE native_ingress_sources (
                 id VARCHAR(64) PRIMARY KEY NOT NULL,workspace_uuid VARCHAR(36) NOT NULL,bot_uuid VARCHAR(255) NOT NULL,
-                binding JSON NOT NULL,binding_sha256 VARCHAR(64) NOT NULL,cursor TEXT,last_source_sequence BIGINT,
+                binding JSON NOT NULL,binding_sha256 VARCHAR(64) NOT NULL,cursor TEXT,owner_frame_sequences BOOLEAN NOT NULL DEFAULT 0,last_source_sequence BIGINT,
                 position INTEGER NOT NULL DEFAULT 0,router_cursor INTEGER NOT NULL DEFAULT 0,router_pending_page VARCHAR(64),
                 UNIQUE(workspace_uuid,id),UNIQUE(workspace_uuid,bot_uuid),
                 FOREIGN KEY(workspace_uuid) REFERENCES workspaces(uuid) ON DELETE CASCADE,
@@ -661,7 +661,8 @@ async def test_migration_rejects_unapproved_cascade_on_otherwise_matching_native
 async def test_typed_owner_unresolved_preserves_event_sequence_without_fake_message_reference(manager):
     from langbot.pkg.platform.native_contract import SourceUnresolved
     from langbot.pkg.entity.persistence.native_ingress import NativeGap
-    ingress=store(manager)
+    ingress=NativeIngressStore(manager,workspace_uuid='workspace-a',bot_uuid='bot-workspace-a',
+                               binding=store(manager).binding,owner_frame_sequences=True)
     await ingress.initialize('owner-before')
     unresolved=SourceUnresolved('owner-event-9',9,'wx-raw-3','test-source','chat-a')
     await ingress.accept_page(SourcePage('owner-before','owner-after',(),unresolved=(unresolved,)),authorize=allowed)
@@ -670,10 +671,72 @@ async def test_typed_owner_unresolved_preserves_event_sequence_without_fake_mess
     assert page['items']==[] and page['gaps']==[dict(event_id=_hash([ingress.source_id,'native-unresolved','owner-event-9']),
         reason='native_unresolved',source='test-source',scope='chat-a')]
     await ingress.ack_router_page(page['page_id'],page['page_sha256'],[],authorize=allowed)
-    restarted=store(manager)
+    restarted=NativeIngressStore(manager,workspace_uuid='workspace-a',bot_uuid='bot-workspace-a',
+                               binding=store(manager).binding,owner_frame_sequences=True)
     assert await restarted.checkpoint()=='owner-after'
     assert await restarted.source_sequence_checkpoint()==9
     async with manager.tenant_uow('workspace-a') as uow:
         row=(await uow.session.execute(sa.select(NativeGap))).scalar_one()
         assert row.owner_event_id=='owner-event-9' and row.source_sequence==9 and row.upstream_cursor=='wx-raw-3'
         assert not hasattr(row,'record') and not hasattr(row,'reference')
+
+
+def owner_store(manager):
+    return NativeIngressStore(manager,workspace_uuid='workspace-a',bot_uuid='bot-workspace-a',
+                              binding=store(manager).binding,owner_frame_sequences=True)
+
+
+def owner_event(record,sequence,owner_eid):
+    from dataclasses import replace
+    value=router_event(record)
+    value.payload['owner_event_id']=owner_eid
+    value.payload['change']['sequence']=sequence
+    return replace(value,owner_frame_sequence=sequence)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('second_kind',['normal','unresolved'])
+async def test_owner_frame_sequence_is_unique_across_pages_restart_and_frame_types(manager,second_kind):
+    from langbot.pkg.platform.native_contract import SourceUnresolved
+    ingress=owner_store(manager)
+    await ingress.initialize('10')
+    first=owner_event('native-1',9,'owner-a')
+    await ingress.accept_page(SourcePage('10','11',(first,)),authorize=allowed)
+    restarted=owner_store(manager)
+    if second_kind=='normal':
+        page=SourcePage('11','12',(owner_event('native-2',9,'owner-b'),))
+    else:
+        page=SourcePage('11','12',(),unresolved=(SourceUnresolved('owner-b',9,'raw-2','test-source','chat-a'),))
+    with pytest.raises(ValueError,match='sequence_conflict'):
+        await restarted.accept_page(page,authorize=allowed)
+    assert await restarted.checkpoint()=='11'
+    assert await restarted.source_sequence_checkpoint()==9
+    assert len((await restarted.accepted_events(authorize=allowed))['items'])==1
+
+
+@pytest.mark.asyncio
+async def test_finance_record_sequence_is_not_reinterpreted_as_global_owner_frame_sequence(manager):
+    from langbot.pkg.entity.persistence.native_ingress import NativeFrame
+    ingress=store(manager)
+    await ingress.initialize('10')
+    one=router_event('finance-one')
+    two=router_event('finance-two')
+    assert one.payload['change']['sequence']==two.payload['change']['sequence']==1
+    await ingress.accept_page(SourcePage('10','11',(one,two)),authorize=allowed)
+    assert len((await ingress.accepted_events(authorize=allowed))['items'])==2
+    assert await ingress.source_sequence_checkpoint() is None
+    async with manager.tenant_uow('workspace-a') as uow:
+        assert (await uow.session.execute(sa.select(sa.func.count()).select_from(NativeFrame))).scalar()==0
+
+
+@pytest.mark.asyncio
+async def test_exact_owner_frame_replay_is_idempotent_but_eid_cannot_change_sequence(manager):
+    ingress=owner_store(manager)
+    await ingress.initialize('10')
+    frame=owner_event('native-1',9,'owner-a')
+    page=SourcePage('10','11',(frame,))
+    receipt=await ingress.accept_page(page,authorize=allowed)
+    assert await owner_store(manager).accept_page(page,authorize=allowed)==receipt
+    with pytest.raises(ValueError,match='identity_conflict'):
+        await ingress.accept_page(SourcePage('11','12',(owner_event('native-2',10,'owner-a'),)),authorize=allowed)
+    assert await ingress.checkpoint()=='11'

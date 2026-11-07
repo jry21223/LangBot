@@ -49,6 +49,7 @@ importutil.import_modules_in_pkg(persistence)
 
 
 _ALEMBIC_TENANT_TABLES = {
+    'native_ingress_frames',
     'native_ingress_gaps',
     'native_ingress_access',
     'native_ingress_sources',

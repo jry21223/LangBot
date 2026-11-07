@@ -29,6 +29,7 @@ class SourceEnvelope:
     reference: str
     kind: str
     payload: dict[str, Any]
+    owner_frame_sequence: int | None = None
 
 
 @dataclass(frozen=True)

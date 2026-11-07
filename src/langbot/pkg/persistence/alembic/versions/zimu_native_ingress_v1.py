@@ -13,7 +13,7 @@ down_revision = '0037_metadata_text'
 branch_labels = None
 depends_on = None
 
-_TABLES = ('native_ingress_sources', 'native_ingress_pages', 'native_ingress_events', 'native_send_operations', 'native_ingress_access','native_ingress_gaps')
+_TABLES = ('native_ingress_sources', 'native_ingress_pages', 'native_ingress_events', 'native_send_operations', 'native_ingress_access','native_ingress_gaps','native_ingress_frames')
 
 
 _UNIQUES = {
@@ -22,6 +22,7 @@ _UNIQUES = {
     'native_ingress_events': {('source_id','position')},
     'native_send_operations': set(),
     'native_ingress_access': {('workspace_uuid','bot_uuid')},
+    'native_ingress_frames': {('source_id','sequence'),('source_id','owner_event_id'),('source_id','frame_id')},
     'native_ingress_gaps': {('source_id','owner_event_id'),('source_id','position')},
 }
 
@@ -83,6 +84,7 @@ def upgrade():
         sa.Column('binding', sa.JSON, nullable=False),
         sa.Column('binding_sha256', sa.String(64), nullable=False),
         sa.Column('cursor', sa.Text, nullable=True),
+        sa.Column('owner_frame_sequences',sa.Boolean,nullable=False,server_default=sa.false()),
         sa.Column('last_source_sequence',sa.BigInteger,nullable=True),
         sa.Column('position', sa.Integer, nullable=False, server_default='0'),
         sa.Column('router_cursor', sa.Integer, nullable=False, server_default='0'),
@@ -143,6 +145,14 @@ def upgrade():
         sa.Column('position',sa.Integer,nullable=False),
         sa.Column('upstream_cursor',sa.Text,nullable=False),
         sa.UniqueConstraint('source_id','owner_event_id'),sa.UniqueConstraint('source_id','position'),
+        sa.ForeignKeyConstraint(['workspace_uuid','source_id'],['native_ingress_sources.workspace_uuid','native_ingress_sources.id']))
+    _create_table('native_ingress_frames',
+        sa.Column('id',sa.String(64),primary_key=True),sa.Column('workspace_uuid',sa.String(36),nullable=False),
+        sa.Column('source_id',sa.String(64),nullable=False),sa.Column('sequence',sa.BigInteger,nullable=False),
+        sa.Column('owner_event_id',sa.String(512),nullable=True),sa.Column('frame_id',sa.String(64),nullable=False),
+        sa.Column('fingerprint',sa.String(64),nullable=False),
+        sa.UniqueConstraint('source_id','sequence'),sa.UniqueConstraint('source_id','owner_event_id'),
+        sa.UniqueConstraint('source_id','frame_id'),
         sa.ForeignKeyConstraint(['workspace_uuid','source_id'],['native_ingress_sources.workspace_uuid','native_ingress_sources.id']))
     if 'ix_native_ingress_events_pending' not in {i['name'] for i in sa.inspect(op.get_bind()).get_indexes('native_ingress_events')}:
         op.create_index('ix_native_ingress_events_pending', 'native_ingress_events',
