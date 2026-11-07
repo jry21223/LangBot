@@ -384,3 +384,24 @@ def test_pure_native_config_validation_rejects_raw_secrets_and_network_overrides
     ]:
         with pytest.raises(ValueError):
             adapter.native_validate_config(dict(config, **{key: value}))
+
+
+@pytest.mark.asyncio
+async def test_public_native_icon_route_serves_existing_png_from_real_component():
+    from types import SimpleNamespace
+    import quart
+    from langbot.pkg.discover.engine import ComponentDiscoveryEngine
+    from langbot.pkg.api.http.controller.groups.platform.adapters import AdaptersRouterGroup
+
+    component = ComponentDiscoveryEngine(None).load_component_manifest('pkg/platform/sources/agent_wechat.yaml')
+    ap = SimpleNamespace(
+        platform_mgr=SimpleNamespace(
+            get_available_adapter_manifest_by_name=lambda name: component if name == 'agent-wechat' else None
+        )
+    )
+    server = quart.Quart('native-personal-wechat-icon')
+    await AdaptersRouterGroup(ap, server).initialize()
+    result = await server.test_client().get('/platform/adapters/agent-wechat/icon')
+    data = await result.get_data()
+    assert result.status_code == 200 and result.mimetype == 'image/png'
+    assert data.startswith(b'\x89PNG\r\n\x1a\n') and len(data) == 477676
