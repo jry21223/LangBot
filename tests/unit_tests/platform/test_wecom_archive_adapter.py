@@ -113,3 +113,31 @@ def test_pure_pre_persistence_validation_rejects_service_fields_and_invalid_bind
 def test_runtime_health_is_unknown_before_any_real_source_evidence():
     adapter = WecomArchiveAdapter(source_config(), FixtureLogger())
     assert adapter.native_runtime_state() == {'state': 'unknown'}
+
+
+@pytest.mark.asyncio
+async def test_native_manifest_icon_is_served_by_the_real_public_adapter_route():
+    from pathlib import Path
+    from types import SimpleNamespace
+    import quart
+    import yaml
+    from langbot.pkg.discover.engine import Component
+    from langbot.pkg.api.http.controller.groups.platform.adapters import AdaptersRouterGroup
+
+    manifest = yaml.safe_load(Path('src/langbot/pkg/platform/adapters/wecom_archive/manifest.yaml').read_text())
+    component = Component(
+        owner='system', manifest=manifest, rel_path='pkg/platform/adapters/wecom_archive/manifest.yaml'
+    )
+    assert component.icon_rel_path == 'pkg/platform/adapters/wecom_archive/wecom.png'
+    ap = SimpleNamespace(
+        platform_mgr=SimpleNamespace(
+            get_available_adapter_manifest_by_name=lambda name: component if name == 'wecom-archive' else None
+        )
+    )
+    web = quart.Quart('native-wecom-icon')
+    await AdaptersRouterGroup(ap, web).initialize()
+    response = await web.test_client().get('/api/v1/platform/adapters/wecom-archive/icon')
+    assert response.status_code == 200
+    assert response.mimetype == 'image/png'
+    data = await response.get_data()
+    assert data.startswith(b'\x89PNG\r\n\x1a\n') and len(data) > 1024
