@@ -423,35 +423,38 @@ class NativeIngressStore:
                     raise NativeAccessDenied("native_router_receiver_mismatch")
                 if page.previous_cursor != cursor:
                     raise ValueError('native_router_ack_pending')
-                return await self._router_page_value(session, page)
-            if source.router_cursor != position:
-                raise ValueError('native_router_cursor_conflict')
-            rows = (await session.execute(sa.select(NativeEvent).where(
-                NativeEvent.source_id == self.source_id, NativeEvent.position > position,
-            ).order_by(NativeEvent.position).limit(limit))).scalars().all()
-            owner_gaps=(await session.execute(sa.select(NativeGap).where(
-                NativeGap.source_id==self.source_id,NativeGap.position>position,
-            ).order_by(NativeGap.position).limit(limit))).scalars().all()
-            rows=sorted([*rows,*owner_gaps],key=lambda row:row.position)[:limit]
-            next_cursor = str(rows[-1].position) if rows else str(position)
-            page_id = _hash([self.source_id, 'router', self.receiver_id, cursor, next_cursor])
-            items,gaps = self._router_parts(rows)
-            value = dict(page_id=page_id, source=self.binding.source, scope=self.binding.scope,
-                         complete_page=True, previous_cursor=cursor, next_cursor=next_cursor,
-                         gaps=gaps, items=items)
-            fingerprint = _hash(value)
-            # An empty poll has no acknowledgement and must not pin the feed.
-            if rows:
-                changed = await session.execute(sa.update(NativeSource).where(
-                    NativeSource.id == self.source_id, NativeSource.router_cursor == position,
-                    NativeSource.router_pending_page.is_(None),
-                ).values(router_pending_page=page_id))
-                if changed.rowcount != 1:
-                    raise ValueError('native_router_page_race')
-                session.add(NativePage(id=page_id, workspace_uuid=self.workspace_uuid,
-                    source_id=self.source_id, direction='router', receiver_id=self.receiver_id, previous_cursor=cursor,
-                    cursor=next_cursor, fingerprint=fingerprint, event_ids=[r.id for r in rows]))
-        return dict(value, page_sha256=fingerprint)
+                response=await self._router_page_value(session, page)
+            else:
+                if source.router_cursor != position:
+                    raise ValueError('native_router_cursor_conflict')
+                rows = (await session.execute(sa.select(NativeEvent).where(
+                    NativeEvent.source_id == self.source_id, NativeEvent.position > position,
+                ).order_by(NativeEvent.position).limit(limit))).scalars().all()
+                owner_gaps=(await session.execute(sa.select(NativeGap).where(
+                    NativeGap.source_id==self.source_id,NativeGap.position>position,
+                ).order_by(NativeGap.position).limit(limit))).scalars().all()
+                rows=sorted([*rows,*owner_gaps],key=lambda row:row.position)[:limit]
+                next_cursor = str(rows[-1].position) if rows else str(position)
+                page_id = _hash([self.source_id, 'router', self.receiver_id, cursor, next_cursor])
+                items,gaps = self._router_parts(rows)
+                value = dict(page_id=page_id, source=self.binding.source, scope=self.binding.scope,
+                             complete_page=True, previous_cursor=cursor, next_cursor=next_cursor,
+                             gaps=gaps, items=items)
+                fingerprint = _hash(value)
+                # An empty poll has no acknowledgement and must not pin the feed.
+                if rows:
+                    changed = await session.execute(sa.update(NativeSource).where(
+                        NativeSource.id == self.source_id, NativeSource.router_cursor == position,
+                        NativeSource.router_pending_page.is_(None),
+                    ).values(router_pending_page=page_id))
+                    if changed.rowcount != 1:
+                        raise ValueError('native_router_page_race')
+                    session.add(NativePage(id=page_id, workspace_uuid=self.workspace_uuid,
+                        source_id=self.source_id, direction='router', receiver_id=self.receiver_id, previous_cursor=cursor,
+                        cursor=next_cursor, fingerprint=fingerprint, event_ids=[r.id for r in rows]))
+                response=dict(value,page_sha256=fingerprint)
+        await authorize()
+        return response
 
     async def ack_router_page(self, page_id, page_sha256, receipts, *, authorize: Authorize):
         """Persist only the Host's committed producer receipts, never success claims."""
@@ -499,6 +502,9 @@ class NativeIngressStore:
                 source.router_pending_page = None
             elif source.router_cursor < int(page.cursor):
                 raise ValueError('native_router_ack_out_of_order')
+        # A failed remote post-check cannot undo this committed page receipt.
+        # The caller must reconcile the same page/receipt rather than rerun it.
+        await authorize()
         return dict(status='accepted', page_id=page_id, next_cursor=page.cursor)
 
     async def lookup_router_receipt(self, event_id, *, authorize: Authorize):
@@ -508,8 +514,11 @@ class NativeIngressStore:
             await self._source(uow.session)
             event = await uow.session.get(NativeEvent, event_id)
             if event is None or event.source_id != self.source_id:
-                return None
-            return event.receiver_receipt
+                result=None
+            else:
+                result=event.receiver_receipt
+        await authorize()
+        return result
 
     async def send(self, operation_id, target_type, target_id, payload, *, provider: SendProvider, authorize: Authorize):
         """A host-owned operation ID survives crashes and UNKNOWN lookup.
