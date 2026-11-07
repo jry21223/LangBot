@@ -401,7 +401,7 @@ async def test_public_native_icon_route_serves_existing_png_from_real_component(
     )
     server = quart.Quart('native-personal-wechat-icon')
     await AdaptersRouterGroup(ap, server).initialize()
-    result = await server.test_client().get('/platform/adapters/agent-wechat/icon')
+    result = await server.test_client().get('/api/v1/platform/adapters/agent-wechat/icon')
     data = await result.get_data()
     assert result.status_code == 200 and result.mimetype == 'image/png'
     assert data.startswith(b'\x89PNG\r\n\x1a\n') and len(data) == 477676
