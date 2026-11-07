@@ -1,7 +1,7 @@
-"""Exact accepted originals delegated to the live owning native adapter.
+"""Internal accepted-reference metadata guard, not a public original-reader API.
 
-Text/bytes are returned only to the registered reader and never persisted in
-LangBot event metadata or copied to public monitoring events.
+Text, chunks and bytes are refused before resolving a provider. Independently
+authorized OpenAgents source readers retain original content access.
 """
 from dataclasses import asdict
 from hashlib import sha256

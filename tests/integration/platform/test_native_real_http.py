@@ -98,3 +98,13 @@ async def test_ack_post_revoke_does_not_claim_rollback_or_reissue_a_different_re
     fixture.facts['authority_proof']={'binding':original}
     response=await fixture.request('GET',_PATH+'/receipts/'+receipt['event_id'])
     assert response.status_code==200 and (await response.get_json())['data']==receipt
+
+
+@pytest.mark.asyncio
+async def test_original_reader_facade_is_not_a_public_core_http_route(manager):
+    fixture=await native_http_fixture(manager,binding=store(manager).binding)
+    before=fixture.hooks['calls']
+    for operation in ('authority','manifest','original','chunk','media'):
+        response=await fixture.request('GET','/api/v1/native-ingress/bot-workspace-a/source/'+operation)
+        assert response.status_code==404
+    assert fixture.hooks['calls']==before

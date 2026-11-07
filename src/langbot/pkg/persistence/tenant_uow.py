@@ -490,6 +490,13 @@ def _validate_scoped_statement_call(args: tuple[typing.Any, ...], kwargs: dict[s
                 and getattr(getattr(source, 'table', None), 'name', None) == 'legacy_pipelines'
                 and source.name in {'config', 'stages', 'extensions_preferences'}
             )
+            native_bot_config_cas = (
+                type(element.type) is sqlalchemy.Text
+                and isinstance(source, sqlalchemy.Column)
+                and type(source.type) is sqlalchemy.JSON
+                and getattr(getattr(source, 'table', None), 'name', None) == 'bots'
+                and source.name == 'adapter_config'
+            )
             monitoring_metadata = (
                 type(element.type) is sqlalchemy.JSON
                 and isinstance(source, sqlalchemy.Column)
@@ -499,9 +506,9 @@ def _validate_scoped_statement_call(args: tuple[typing.Any, ...], kwargs: dict[s
                     source.name == 'metadata_json' or (source.table.name == 'event_log' and source.name == 'input_json')
                 )
             )
-            if not (pipeline_json_cas or monitoring_metadata):
+            if not (pipeline_json_cas or native_bot_config_cas or monitoring_metadata):
                 raise ScopedSessionTransactionError(
-                    'TenantUnitOfWork only allows trusted pgvector, Pipeline JSON CAS and monitoring metadata casts'
+                    'TenantUnitOfWork only allows trusted pgvector, fixed JSON CAS and monitoring metadata casts'
                 )
 
         if isinstance(element, sqlalchemy.sql.functions.FunctionElement):

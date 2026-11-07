@@ -13,9 +13,10 @@ from langbot.pkg.entity.persistence.bot import Bot
 
 from langbot.pkg.platform.native_contract import SourceBinding, SourceEnvelope, SourcePage
 from tests.integration.platform.native_http_support import native_http_fixture
-from tests.integration.platform.wechat_owner_public_support import real_wechat_owner
+from tests.integration.platform.wechat_owner_public_support import real_wechat_owner as _real_wechat_owner
 
 pytest_plugins = ['tests.integration.platform.test_native_ingress_contracts']
+real_wechat_owner = _real_wechat_owner
 
 
 class CoreASGITransport:

@@ -99,14 +99,6 @@ class LangBotMCPServer:
 
         # Durable Router handoff is an internal single-consumer machine protocol.
         # It deliberately uses the dedicated HTTP receiver ACL, not user MCP tools.
-        @mcp.tool(description='Read exact authorized native source authority/descriptor metadata; original text, chunks and media remain with the independent source reader.')
-        async def read_native_source_original(bot_uuid: str, operation: str, reference: str, version: str, part_index: int | None = None) -> str:
-            from ...platform.native_originals import read_native_original
-            context = _authorized(Permission.RUNTIME_OPERATE)
-            if operation not in {'authority','manifest'}:
-                raise ValueError('native_original_operation_invalid')
-            return _dump(await read_native_original(ap,context,bot_uuid,operation,reference,version,part_index=part_index))
-
         # ----- System (read-only) -------------------------------------- #
         @mcp.tool(description='Get basic LangBot system/runtime information (version, edition).')
         async def get_system_info() -> str:

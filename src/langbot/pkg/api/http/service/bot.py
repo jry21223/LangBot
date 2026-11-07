@@ -809,8 +809,28 @@ class BotService:
         conditions=[persistence_bot.Bot.uuid==bot_uuid,persistence_bot.Bot.adapter.in_(aliases)]
         registry=getattr(getattr(self.ap,'platform_mgr',None),'adapter_dict',{})
         target_type=registry.get(canonical_adapter_name(target_adapter)) if isinstance(registry,dict) else None
-        if callable(getattr(target_type,'native_source_binding',None)) and type(existing.get('enable')) is bool:
-            conditions.append(persistence_bot.Bot.enable==existing['enable'])
+        previous_type=registry.get(canonical_adapter_name(observed_adapter)) if isinstance(registry,dict) else None
+        native_update=(callable(getattr(target_type,'native_source_binding',None))
+                       or callable(getattr(previous_type,'native_source_binding',None)))
+        if native_update:
+            if type(existing.get('enable')) is bool:
+                conditions.append(persistence_bot.Bot.enable==existing['enable'])
+            # Validate and CAS the same database config snapshot. A disabled
+            # writer can change it without changing adapter/enable. Read DB-native
+            # JSON text (also works for PostgreSQL JSON, which has no '=' op).
+            raw_query=scope_statement(sqlalchemy.select(
+                sqlalchemy.cast(persistence_bot.Bot.adapter_config,sqlalchemy.Text)).where(
+                    persistence_bot.Bot.uuid==bot_uuid),persistence_bot.Bot,workspace_uuid)
+            raw_result=await self.ap.persistence_mgr.execute_async(raw_query)
+            raw_config=raw_result.scalar_one_or_none()
+            import json
+            if raw_config is None:
+                raise ValueError('bot_configuration_changed_retry')
+            # Old invalid native config is intentionally redacted by get_bot.
+            # Its explicit complete replacement was independently validated above.
+            if not existing.get('native_configuration_invalid') and json.loads(raw_config)!=existing.get('adapter_config'):
+                raise ValueError('bot_configuration_changed_retry')
+            conditions.append(sqlalchemy.cast(persistence_bot.Bot.adapter_config,sqlalchemy.Text)==raw_config)
         result = await self.ap.persistence_mgr.execute_async(
             scope_statement(
                 sqlalchemy.update(persistence_bot.Bot).values(update_data).where(*conditions),
@@ -863,19 +883,38 @@ class BotService:
             raise WorkspaceNotFoundError('Bot not found')
         await self.ap.platform_mgr.remove_bot(context, bot_uuid)
 
+    async def _authorize_native_log_view(self,context,bot,runtime):
+        from ....platform.native_ui import is_native_adapter
+        if not is_native_adapter(self.ap,bot.get('adapter','')):
+            return
+        from ....platform.native_contract import NativeAccessDenied
+        from ....platform.native_access import authorize_ui_observer
+        if (runtime is None or getattr(runtime,'workspace_uuid',None)!=context.workspace_uuid
+                or getattr(runtime,'native_ingress_store',None) is None
+                or not callable(getattr(runtime,'native_source_authorize',None))):
+            raise NativeAccessDenied('native_source_observer_unavailable')
+        binding=runtime.native_ingress_store.binding
+        await authorize_ui_observer(self.ap,context,bot['uuid'],binding)
+        await runtime.native_source_authorize()
+        await authorize_ui_observer(self.ap,context,bot['uuid'],binding)
+
     async def list_event_logs(
         self, context: TenantContext, bot_uuid: str, from_index: int, max_count: int
     ) -> tuple[list[dict], int]:
-        if await self.get_bot(context, bot_uuid, include_secret=False) is None:
+        bot=await self.get_bot(context, bot_uuid, include_secret=False)
+        if bot is None:
             raise WorkspaceNotFoundError('Bot not found')
         runtime_bot = await self.ap.platform_mgr.get_bot_by_uuid(context, bot_uuid)
+        await self._authorize_native_log_view(context,bot,runtime_bot)
         if runtime_bot is None:
-            # Saved but disabled/unconfigured bots have no runtime logs yet.
+            # Saved ordinary disabled bots have no runtime logs yet.
             return [], 0
 
         logs, total_count = await runtime_bot.logger.get_logs(from_index, max_count)
 
-        return [log.to_json() for log in logs], total_count
+        serialized=[log.to_json() for log in logs]
+        await self._authorize_native_log_view(context,bot,runtime_bot)
+        return serialized, total_count
 
     async def list_event_route_statuses(self, context: TenantContext, bot_uuid: str) -> dict[str, typing.Any]:
         """Return recent runtime status for Bot event routes from in-memory Bot logs."""
@@ -885,6 +924,8 @@ class BotService:
         if bot is None:
             raise WorkspaceNotFoundError('Bot not found')
         runtime_bot = await self.ap.platform_mgr.get_bot_by_uuid(context, bot_uuid)
+
+        await self._authorize_native_log_view(context,bot,runtime_bot)
 
         latest_by_binding: dict[str, dict[str, typing.Any]] = {}
         unmatched_events: list[dict[str, typing.Any]] = []
@@ -941,6 +982,7 @@ class BotService:
             if binding_id not in current_binding_ids
         ]
 
+        await self._authorize_native_log_view(context,bot,runtime_bot)
         return {
             'routes': routes,
             'unmatched_events': unmatched_events[-10:],

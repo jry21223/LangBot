@@ -29,7 +29,8 @@ def server_fixture():
         assert value.owner_task is asyncio.current_task()
         assert value.scope==PersistenceScope.workspace(workspace)
         await asyncio.sleep(0)
-        if fail: raise ValueError('synthetic failure')
+        if fail:
+            raise ValueError('synthetic failure')
         return workspace
     return server,scope
 
@@ -41,7 +42,8 @@ async def test_mcp_preserves_exact_configured_host_origin_and_dns_rebinding_prot
     assert middleware.settings.enable_dns_rebinding_protection is True
     async def status(host,origin=None):
         headers=[(b'host',host.encode()),(b'content-type',b'application/json')]
-        if origin: headers.append((b'origin',origin.encode()))
+        if origin:
+            headers.append((b'origin',origin.encode()))
         response=await middleware.validate_request(Request({'type':'http','headers':headers}),is_post=True)
         return None if response is None else response.status_code
     assert await status('approved.example:8443','https://approved.example:8443') is None
@@ -58,11 +60,13 @@ async def test_mcp_child_tasks_open_independent_real_persistence_scopes_and_clea
         try:
             task=asyncio.create_task(server.mcp.call_tool('inspect_scope',{'workspace':workspace,'fail':fail}))
             if fail:
-                with pytest.raises(Exception): await task
+                with pytest.raises(Exception):
+                    await task
             else:
                 await task
             assert scope.get() is None
-        finally: reset_request_context(token)
+        finally:
+            reset_request_context(token)
     await asyncio.gather(invoke('workspace-a'),invoke('workspace-b'),invoke('workspace-c',True))
 
 
@@ -81,7 +85,8 @@ async def test_mcp_missing_authenticated_context_is_denied_before_tool_scope():
 ])
 def test_mcp_instance_allowlist_cannot_disable_protection_or_enable_remote_wildcards(configuration):
     ap=SimpleNamespace(instance_config=SimpleNamespace(data={'api':{'mcp_transport_security':configuration}}))
-    with pytest.raises(ValueError): transport_security(ap)
+    with pytest.raises(ValueError):
+        transport_security(ap)
 
 
 @pytest.mark.asyncio
@@ -89,5 +94,5 @@ async def test_native_machine_handoff_is_not_exposed_as_user_mcp_tools():
     server, _ = server_fixture()
     names = {tool.name for tool in await server.mcp.list_tools()}
     assert not names & {'read_native_router_page', 'ack_native_router_page', 'lookup_native_router_receipt'}
-    assert 'read_native_source_original' in names
+    assert 'read_native_source_original' not in names
     assert 'get_system_info' in names

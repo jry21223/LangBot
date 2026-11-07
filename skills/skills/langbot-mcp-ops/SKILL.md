@@ -239,13 +239,7 @@ The existing Host commits candidates and coverage before acknowledgement;
 producer acceptance is not business execution success. Do not start a second
 consumer or route native ingress through the ordinary model pipeline.
 
-`read_native_source_original` delegates exact accepted source references to the
-current native adapter for authority and descriptor metadata. Text originals,
-chunks and media are denied here and remain with the independently authorized
-OpenAgents source reader.
-Every read rechecks receiver registration, source authority, the latest durable
-record version and native recall state. It cannot read an arbitrary URL or
-unknown asset. Native media bytes are not exposed to the LangBot metadata receiver.
-MCP does not convert a filename or attachment metadata into parsed text.
-An empty Router poll (no items or gaps and no position advance) needs no ACK;
-a gap-only page does need its frozen page ACK with an empty receipt list.
+Source authority and descriptor reads stay in the existing owning source reader
+and the native adapters' internal metadata protocol. LangBot does not expose a
+second public original-reader HTTP/MCP facade; original text/media permissions
+remain independent of the metadata ingestion service.
