@@ -84,7 +84,7 @@ export function parseNativeIngress(value: unknown): NativeSnapshot {
     !input ||
     state === 'needs_configuration' ||
     state === 'needs_authorization' ||
-    state === 'unknown'
+    !states.has(input.state as NativeState)
   )
     return snapshot;
   const counts = object(input.counts);
@@ -95,17 +95,17 @@ export function parseNativeIngress(value: unknown): NativeSnapshot {
     'quarantines',
     'owner_gaps',
   ] as const;
-  if (
+  const completeMetadata =
     counts &&
+    Array.isArray(input.records) &&
     names.every(
       (key) =>
         Number.isSafeInteger(counts[key]) && (counts[key] as number) >= 0,
-    )
-  ) {
-    snapshot.counts = Object.fromEntries(
-      names.map((key) => [key, counts[key]]),
-    ) as unknown as NativeCounts;
-  }
+    );
+  if (!completeMetadata) return snapshot;
+  snapshot.counts = Object.fromEntries(
+    names.map((key) => [key, counts[key]]),
+  ) as unknown as NativeCounts;
   if (Array.isArray(input.records)) {
     snapshot.recordsAvailable = true;
     for (const candidate of input.records.slice(0, 25)) {
