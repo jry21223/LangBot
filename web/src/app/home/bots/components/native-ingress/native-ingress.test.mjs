@@ -96,7 +96,7 @@ test('withheld metadata is distinct from an authorized empty records array', () 
   );
   assert.equal(parseNativeIngress({ state: 'error' }).recordsAvailable, false);
   assert.equal(
-    parseNativeIngress({ state: 'source_available', records: [] })
+    parseNativeIngress({ ...synthetic, state: 'source_available', records: [] })
       .recordsAvailable,
     true,
   );
@@ -111,4 +111,20 @@ test('an unconfigured disabled draft is explicit and exposes no stale source met
   assert.equal(result.counts, undefined);
   assert.equal(result.recordsAvailable, false);
   assert.deepEqual(result.records, []);
+});
+
+test('unknown upstream health can retain complete guarded historical metadata without becoming healthy', () => {
+  const result = parseNativeIngress({ ...synthetic, state: 'unknown' });
+  assert.equal(result.state, 'unknown');
+  assert.equal(result.records.length, 1);
+  assert.equal(result.counts.source_events, 2);
+  assert.equal(
+    parseNativeIngress({ state: 'unknown', records: synthetic.records })
+      .recordsAvailable,
+    false,
+  );
+  assert.equal(
+    parseNativeIngress({ state: 'error', counts: synthetic.counts }).counts,
+    undefined,
+  );
 });
