@@ -18,6 +18,18 @@ class NativeAdapterGuard:
     def __getattr__(self, name):
         return getattr(self._adapter, name)
 
+    def get_supported_apis(self):
+        return []
+
+    async def is_stream_output_supported(self):
+        return False
+
+    async def reply_message_chunk(self, *args, **kwargs):
+        raise NativeAccessDenied('native_host_operation_required')
+
+    async def create_message_card(self, *args, **kwargs):
+        raise NativeAccessDenied('native_host_operation_required')
+
     async def send_with_context(self, *args, **kwargs):
         raise NativeAccessDenied("native_host_sender_not_registered")
 
@@ -74,7 +86,8 @@ async def attach_native_runtime(runtime):
         raise NativeAccessDenied('native_source_validator_required')
     store = NativeIngressStore(runtime.ap.persistence_mgr, workspace_uuid=runtime.workspace_uuid,
                                bot_uuid=runtime.bot_entity.uuid, binding=binding,
-                               authorization_fence=getattr(authorize_source,"native_fence",None), change_validator=validator)
+                               authorization_fence=getattr(authorize_source,"native_fence",None), change_validator=validator,
+                               owner_gap_codes=getattr(runtime.adapter,"native_owner_gap_codes",frozenset()))
     # initialize is adapter-owned because its initial source cursor must be
     # explicit, persisted, and included in the immutable configuration revision.
     runtime.adapter.attach_native_ingress(store, authorize)

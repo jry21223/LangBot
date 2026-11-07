@@ -14,7 +14,7 @@ from datetime import datetime
 
 import sqlalchemy as sa
 
-from ..entity.persistence.native_ingress import NativeEvent, NativePage, NativeSend, NativeSource
+from ..entity.persistence.native_ingress import NativeEvent, NativeGap, NativePage, NativeSend, NativeSource
 from .native_contract import NativeAccessDenied, AcceptanceReceipt, Authorize, SendProvider, SourceBinding, SourcePage
 
 
@@ -46,6 +46,7 @@ _METADATA_FIELDS = {
                 'content_materialization'},
     'content_materialization': {'status','evidence_fingerprint','parser_version','input_hash','result_sha256',
                                 'text_bytes','parts'},
+    'media_evidence': {'mediaId','mediaType','sourceMd5','contentSha256','sourceFileSize','contentSize'},
     'attachments': {'reference','status','type','sha256','size'},
     'native': {'account_id','thread_id','message_id','server_id','sender_id'},
     'media': {'asset_id','kind','state','sha256','byte_length','content_type'},
@@ -62,6 +63,18 @@ def _metadata(value, field='payload'):
     if isinstance(value,dict):
         if field not in _METADATA_FIELDS or not set(value) <= _METADATA_FIELDS[field]:
             raise ValueError('native_metadata_only')
+        if field=='media_evidence':
+            for key,item in value.items():
+                if key in {'sourceFileSize','contentSize'}:
+                    valid=type(item) is int and 0<=item<=2**63-1
+                elif key=='contentSha256':
+                    valid=isinstance(item,str) and re.fullmatch(r'[0-9a-f]{64}',item)
+                elif key=='sourceMd5':
+                    valid=isinstance(item,str) and re.fullmatch(r'[0-9A-Fa-f]{32}',item)
+                else:
+                    valid=isinstance(item,str) and 1<=len(item)<=512 and not any(ord(c)<32 for c in item)
+                if not valid:
+                    raise ValueError('native_metadata_only')
         for key,item in value.items():
             _metadata(item,key)
     elif isinstance(value,list):
@@ -77,12 +90,13 @@ def _metadata(value, field='payload'):
 
 
 class NativeIngressStore:
-    def __init__(self, manager, *, workspace_uuid: str, bot_uuid: str, binding: SourceBinding, authorization_fence=None, change_validator=None):
+    def __init__(self, manager, *, workspace_uuid: str, bot_uuid: str, binding: SourceBinding, authorization_fence=None, change_validator=None, owner_gap_codes=frozenset()):
         self.manager = manager
         self.workspace_uuid = _identifier(workspace_uuid)
         self.bot_uuid = _identifier(bot_uuid)
         if len(bot_uuid)>255 or len(workspace_uuid)>36:
             raise ValueError("native_owner_identifier_invalid")
+        self.owner_gap_codes = frozenset(owner_gap_codes)
         self.change_validator = change_validator
         self.authorization_fence = authorization_fence
         self.receiver_id = getattr(authorization_fence, "receiver_id", None)
@@ -129,6 +143,9 @@ class NativeIngressStore:
     async def accept_page(self, page: SourcePage, *, authorize: Authorize) -> AcceptanceReceipt:
         if not isinstance(page, SourcePage) or page.complete is not True or len(page.events) > 100:
             raise ValueError('native_complete_page_required')
+        if (not isinstance(page.gaps,tuple) or len(page.gaps)>2 or any(not isinstance(code,str) for code in page.gaps) or len(set(page.gaps))!=len(page.gaps)
+                or any(code not in self.owner_gap_codes for code in page.gaps)):
+            raise ValueError('native_owner_gap_not_supported')
         _identifier(page.previous_cursor, optional=True)
         _identifier(page.next_cursor)
         envelopes = []
@@ -153,7 +170,7 @@ class NativeIngressStore:
             raise ValueError('native_page_too_large')
         await authorize()
         page_id = _hash([self.source_id, "source", page.previous_cursor, page.next_cursor])
-        fingerprint = _hash(envelopes)
+        fingerprint = _hash(dict(events=envelopes,gaps=page.gaps))
         receipt = None
         async with self._own_transaction() as uow:
             session = uow.session
@@ -180,6 +197,14 @@ class NativeIngressStore:
                             source_id=self.source_id, position=source.position, envelope=value, fingerprint=_hash(value),
                             status='pending' if eligible else 'recorded'))
                     event_ids.append(event_id)
+                for code in page.gaps:
+                    gap_id=_hash([self.source_id,'owner-gap',code])
+                    old_gap=await session.get(NativeGap,gap_id)
+                    if old_gap is None:
+                        source.position+=1
+                        session.add(NativeGap(id=gap_id,workspace_uuid=self.workspace_uuid,source_id=self.source_id,
+                            code=code,position=source.position,upstream_cursor=page.next_cursor))
+                    event_ids.append(gap_id)
                 await session.flush()
                 changed = await session.execute(sa.update(NativeSource).where(
                     NativeSource.id == self.source_id,
@@ -265,7 +290,10 @@ class NativeIngressStore:
     def _router_parts(self, rows):
         items, gaps = [], []
         for event in rows:
-            if event.envelope['kind'] == 'unresolved':
+            if isinstance(event,NativeGap):
+                gaps.append(dict(event_id=event.id,reason='owner_source_gap',source=self.binding.source,
+                                 scope=self.binding.scope,code=event.code))
+            elif event.envelope['kind'] == 'unresolved':
                 gaps.append(dict(event_id=event.id,reason='native_unresolved',
                                  source=self.binding.source,scope=self.binding.scope))
             else:
@@ -276,6 +304,8 @@ class NativeIngressStore:
         rows = []
         for event_id in page.event_ids:
             event = await session.get(NativeEvent, event_id)
+            if event is None:
+                event=await session.get(NativeGap,event_id)
             if event is None or event.source_id != self.source_id:
                 raise ValueError('native_router_event_missing')
             rows.append(event)
@@ -313,6 +343,10 @@ class NativeIngressStore:
             rows = (await session.execute(sa.select(NativeEvent).where(
                 NativeEvent.source_id == self.source_id, NativeEvent.position > position,
             ).order_by(NativeEvent.position).limit(limit))).scalars().all()
+            owner_gaps=(await session.execute(sa.select(NativeGap).where(
+                NativeGap.source_id==self.source_id,NativeGap.position>position,
+            ).order_by(NativeGap.position).limit(limit))).scalars().all()
+            rows=sorted([*rows,*owner_gaps],key=lambda row:row.position)[:limit]
             next_cursor = str(rows[-1].position) if rows else str(position)
             page_id = _hash([self.source_id, 'router', self.receiver_id, cursor, next_cursor])
             items,gaps = self._router_parts(rows)
@@ -349,7 +383,11 @@ class NativeIngressStore:
             receipt_event_ids = []
             for event_id in page.event_ids:
                 event = await session.get(NativeEvent,event_id)
-                if event.envelope['kind'] != 'unresolved':
+                if event is None:
+                    gap=await session.get(NativeGap,event_id)
+                    if gap is None or gap.source_id!=self.source_id:
+                        raise ValueError('native_router_gap_missing')
+                elif event.envelope['kind'] != 'unresolved':
                     receipt_event_ids.append(event_id)
             if len(receipts) != len(receipt_event_ids) or len({r.get('event_id') for r in receipts if isinstance(r, dict)}) != len(receipts):
                 raise ValueError('native_router_receipts_incomplete')

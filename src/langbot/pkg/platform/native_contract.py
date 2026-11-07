@@ -37,6 +37,7 @@ class SourcePage:
     next_cursor: str
     events: tuple[SourceEnvelope, ...]
     complete: bool = True
+    gaps: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

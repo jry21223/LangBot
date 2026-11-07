@@ -39,10 +39,13 @@ class NativeClientRegistry:
             raise NativeAccessDenied('native_secret_file_invalid')
         provider=entry.get('provider')
         if self.constructors is None:
-            if provider!='agent-wechat-v1':
-                raise NativeAccessDenied('native_client_provider_not_supported')
-            from .adapters.agent_wechat.client import WxClient
-            constructor=WxClient
+            # wx v1.4 account read/media tokens cover every thread. No Bot
+            # allowlist or file reference can reduce that upstream capability.
+            # The existing source owner must supply a real thread-scoped
+            # transport before a production constructor is registered here.
+            if provider=='agent-wechat-v1':
+                raise NativeAccessDenied('native_thread_scoped_transport_required')
+            raise NativeAccessDenied('native_client_provider_not_supported')
         else:
             constructor=self.constructors.get(provider)
             if not callable(constructor):
