@@ -665,7 +665,9 @@ class BotService:
         adapter_runtime_values = {}
 
         runtime_bot = await self.ap.platform_mgr.get_bot_by_uuid(context, bot_uuid)
-        if runtime_bot is not None:
+        from ....platform.native_ui import is_native_adapter,native_ui_status
+        native=is_native_adapter(self.ap,persistence_bot['adapter'])
+        if runtime_bot is not None and not native:
             adapter_runtime_values['bot_account_id'] = runtime_bot.adapter.bot_account_id
 
         # Webhook URL for adapters that declare a generated webhook config item.
@@ -685,8 +687,7 @@ class BotService:
             adapter_runtime_values['webhook_full_url'] = None
             adapter_runtime_values['extra_webhook_full_url'] = None
 
-        from ....platform.native_ui import is_native_adapter,native_ui_status
-        if is_native_adapter(self.ap,persistence_bot['adapter']):
+        if native:
             adapter_runtime_values['native_ingress']=await native_ui_status(self.ap,context,persistence_bot,runtime_bot)
         persistence_bot['adapter_runtime_values'] = adapter_runtime_values
 

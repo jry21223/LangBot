@@ -136,3 +136,26 @@ async def test_service_audience_expectation_cannot_be_forged_by_config_or_callba
         bad=dict(authority_proof={'grant':dict(grant,**{key:value}),'binding':expected['binding']})
         with pytest.raises(PermissionError):
             verify_authority(expected,bad,store(manager).binding)
+
+
+@pytest.mark.asyncio
+async def test_outer_bot_detail_does_not_leak_source_account_outside_observer_gate(manager):
+    from langbot.pkg.api.http.service.bot import BotService
+    ap,runtime,viewer,bot,state,calls=await prepared(manager)
+    await member(manager,'other')
+    class NativeAdapter:
+        def native_source_binding(self): return runtime.native_ingress_store.binding
+    async def get_bot(ctx,bot_uuid): return runtime
+    ap.platform_mgr=SimpleNamespace(adapter_dict={'test':NativeAdapter},get_bot_by_uuid=get_bot)
+    ap.discover=SimpleNamespace(get_components_by_kind=lambda kind:[])
+    runtime.adapter.bot_account_id='synthetic-sensitive-source-account'
+    from langbot.pkg.entity.persistence.bot import Bot
+    async with manager.tenant_uow('workspace-a') as uow:
+        await uow.session.execute(sa.update(Bot).where(Bot.uuid=='bot-workspace-a').values(enable=True))
+    viewer=replace(viewer,principal=PrincipalContext(PrincipalType.ACCOUNT,account_uuid='other'))
+    async with manager.tenant_scope('workspace-a'):
+        result=await BotService(ap).get_runtime_bot_info(viewer,'bot-workspace-a',include_secret=False)
+    values=result['adapter_runtime_values']
+    assert values['native_ingress']['state']=='needs_authorization'
+    assert 'bot_account_id' not in values
+    assert 'synthetic-sensitive-source-account' not in str(result)
