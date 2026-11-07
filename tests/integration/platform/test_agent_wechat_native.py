@@ -176,3 +176,17 @@ async def test_real_native_runtime_attaches_wx_client_before_current_source_auth
         await adapter.native_authority(
             next(iter(adapter.worker.records)), next(iter(adapter.worker.records.values()))[0]
         )
+
+
+@pytest.mark.asyncio
+async def test_restart_reconciles_lost_ack_even_without_another_source_event(manager):
+    source, client, store = setup(manager)
+    await source.initialize()
+    client.ack.side_effect = WxProtocolError('lost_ack')
+    with pytest.raises(WxProtocolError):
+        await source.accept_event(event())
+    restarted, replacement, _ = setup(manager)
+    await restarted.initialize()
+    replacement.ack.assert_awaited_once_with('consumer', '10')
+    replacement.message.assert_not_called()
+    assert await store.checkpoint() == '10'

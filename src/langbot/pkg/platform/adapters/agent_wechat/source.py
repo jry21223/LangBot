@@ -70,6 +70,10 @@ class WxNativeSource:
             position = page['next_position']
             if not page['has_more']:
                 break
+        checkpoint = await self.store.checkpoint()
+        if checkpoint != self.initial_cursor:
+            await self.authorize()
+            await self.client.ack(self.consumer, checkpoint)
 
     async def native_source_authority(self):
         await self.authorize()
