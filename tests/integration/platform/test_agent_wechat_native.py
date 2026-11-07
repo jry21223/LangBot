@@ -395,7 +395,11 @@ async def test_scoped_owner_http_runtime_persists_typed_gaps_and_preserves_indep
     page['items'].insert(0, unresolved)
     page['gaps'] = ['original_unavailable']
     await worker.poll_once()
-    assert adapter.native_runtime_state() == {'state': 'unknown', 'error_code': 'upstream_state_unverified'}
+    assert adapter.native_runtime_state() == {
+        'state': 'unknown',
+        'error_code': 'upstream_state_unverified',
+        'collector_verified': False,
+    }
     assert await store.checkpoint() == 'owner-after'
     assert await store.source_sequence_checkpoint() == 101
     rows = await store.accepted_events(authorize=runtime.native_source_authorize)

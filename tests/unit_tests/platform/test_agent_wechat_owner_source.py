@@ -184,7 +184,7 @@ async def test_runtime_state_is_pure_and_uses_current_collector_proof_not_cached
     }
     authority['collector'] = collector
     await client.native_authority()
-    assert adapter.native_runtime_state() == {'state': 'connected'}
+    assert adapter.native_runtime_state() == {'state': 'connected', 'collector_verified': True}
     assert (adapter.state, adapter.error_code) == ('unknown', 'upstream_state_unverified')
     authority['collector'] = dict(
         collector,
@@ -194,5 +194,9 @@ async def test_runtime_state_is_pure_and_uses_current_collector_proof_not_cached
         contact_sync_ready=False,
     )
     await client.native_authority()
-    assert adapter.native_runtime_state() == {'state': 'awaiting_upstream', 'error_code': 'upstream_disconnected'}
+    assert adapter.native_runtime_state() == {
+        'state': 'awaiting_upstream',
+        'error_code': 'upstream_disconnected',
+        'collector_verified': False,
+    }
     assert (adapter.state, adapter.error_code) == ('unknown', 'upstream_state_unverified')

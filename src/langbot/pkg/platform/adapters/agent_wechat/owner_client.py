@@ -85,7 +85,8 @@ def _media(items):
             raise OwnerProtocolError('owner_available_media_integrity_required')
 
 
-def _collector(value, account):
+def validate_collector_proof(value, account):
+    """Return exact fresh collector facts, or no evidence; this grants no data access."""
     fields = {'account', 'authenticated', 'connection', 'incoming_transport', 'contact_sync_ready', 'observed_at'}
     if not isinstance(value, dict) or set(value) != fields or value['account'] != account:
         return None
@@ -110,6 +111,22 @@ def _collector(value, account):
     except (ValueError, OverflowError):
         return None
     return deepcopy(value)
+
+
+def collector_connection_state(value, account):
+    """Only authenticated online native-push and sync-ready evidence is connected."""
+    current = validate_collector_proof(value, account)
+    if current is None:
+        return 'unknown'
+    if not current['authenticated'] or current['connection'] == 'disconnected':
+        return 'disconnected'
+    if (
+        current['connection'] == 'online'
+        and current['incoming_transport'] == 'native_push'
+        and current['contact_sync_ready']
+    ):
+        return 'connected'
+    return 'awaiting_upstream'
 
 
 class OwnerNativeClient:
@@ -200,18 +217,7 @@ class OwnerNativeClient:
             raise OwnerProtocolError('owner_response_invalid') from None
 
     def upstream_state(self):
-        current = _collector(self.collector, self.account_id)
-        if current is None:
-            return 'unknown'
-        if not current['authenticated'] or current['connection'] == 'disconnected':
-            return 'disconnected'
-        if (
-            current['connection'] == 'online'
-            and current['incoming_transport'] == 'native_push'
-            and current['contact_sync_ready']
-        ):
-            return 'connected'
-        return 'awaiting_upstream'
+        return collector_connection_state(self.collector, self.account_id)
 
     async def native_authority(self, *, reference=None, version=None):
         self.collector = None
@@ -279,7 +285,7 @@ class OwnerNativeClient:
                 _id(original['parser_version'])
         elif 'original' in result:
             raise OwnerProtocolError('owner_unrequested_original')
-        self.collector = _collector(result.get('collector'), self.account_id)
+        self.collector = validate_collector_proof(result.get('collector'), self.account_id)
         result.pop('collector', None)
         if self.collector is not None:
             result['collector'] = deepcopy(self.collector)

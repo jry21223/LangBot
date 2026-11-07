@@ -243,6 +243,10 @@ class AgentWeChatAdapter(AbstractMessagePlatformAdapter):
         }
         if error_code is not None:
             result['error_code'] = error_code if error_code in safe else 'source_unavailable'
+        if isinstance(self.client, OwnerNativeClient):
+            result['collector_verified'] = bool(
+                self.owner_poll_validated and state == 'connected' and self.client.upstream_state() == 'connected'
+            )
         return result
 
     async def native_connection_facts(self):
