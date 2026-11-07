@@ -91,3 +91,44 @@ metadata before durable acceptance. The initial narrow projection deliberately
 omits original bodies and owner filesystem paths. Its retained
 `projection_hash` remains owner provenance; this adapter does not claim to
 recompute the owner's projection hash over the new audience's narrowed shape.
+
+## Operator setup and status
+
+Create the native channel with its source/account/scope/grant revision and an
+opaque `credential_ref`. The reference must first identify a disabled,
+operator-controlled service-registry entry for this exact Bot, Workspace and
+binding. Creating or editing Bot configuration grants no source access and does
+not provision a credential. Actual service registration, secret mounting,
+metadata-only source permissions and audience enabling require their own exact
+review. Never paste a source credential or filesystem path into the form.
+
+| State | Meaning | Required operator action |
+| --- | --- | --- |
+| Inactive | The Bot is disabled; no source connection should run. | Leave disabled until registration and acceptance gates are complete. |
+| Missing registration/client | The source grant, registry reference or trusted service client is absent. | Register the exact approved binding through the controlled service path; entering another Bot config value is insufficient. |
+| Proof mismatch | Fresh owner proof or its source, corporation, scope, revision or Workspace does not match the registered binding. | Verify the owner's current proof and the intended audience. Do not substitute configured account labels for proof or silently widen the grant. |
+| Read only / unsendable | This source intentionally advertises no send API. | Use its archive intake and existing authorized Router path; sending, replying and arbitrary platform calls remain unsupported. |
+
+Status logs describe startup, durable page acceptance and sanitized failure
+codes. A startup log alone does not certify connectivity or successful intake.
+A durable acceptance receipt certifies local metadata admission; it does not
+certify Router execution, original read access or a completed business result.
+
+## Candidate validation record
+
+The earlier composed candidate passed 55 isolated contracts before the final
+reference-only configuration change. The subsequent native discovery,
+capability and pure configuration-validation slice passed six tests. These are
+separate receipts, not an additive total or a production acceptance claim.
+
+Three image/voice/file integration regressions currently reproduce a known
+shared-Core failure: valid nonempty six-field `media_evidence` arrays are
+rejected by the Core metadata guard. The source adapter does not suppress those
+arrays to make admission appear successful. After the shared fix, rerun the
+composed source/SQLite/Core contracts, the real HTTP create/update secret
+rejection tests, and the coverage-gap handoff tests before declaring a
+switchable candidate. Pure constructor validation does not prove that the HTTP
+configuration API rejected a secret before persistence.
+
+No test here demonstrates a deployed service, current real-account grant,
+working parsing worker, or authorized end-to-end business delivery.
