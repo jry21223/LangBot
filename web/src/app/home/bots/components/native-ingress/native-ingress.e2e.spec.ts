@@ -1,6 +1,7 @@
 // Synthetic API fixture only. This is UI verification, not a live source test.
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { installLangBotApiMocks } from '../../../../../../tests/e2e/fixtures/langbot-api';
+import manifestFixtures from './native-source-manifests.synthetic.json';
 const fixtureId = 'native-fixture';
 const counts = {
   source_events: 2,
@@ -16,7 +17,7 @@ const records = [
     version: 'fixture-v2',
     kind: 'attachments_changed',
     stage: 'router_accepted',
-    receipt_id: 'fixture-receipt',
+    receipt_id: 'fixture-receipt-' + 'r'.repeat(80),
   },
   {
     event_id: 'fixture-event-two',
@@ -46,7 +47,7 @@ function fixtureBot(runtime: unknown) {
     name: 'Synthetic Native Source',
     description: 'Synthetic only',
     enable: true,
-    adapter: 'synthetic-native',
+    adapter: 'wecom-archive',
     adapter_config: {
       source: 'fixture-source',
       account: 'fixture-corp',
@@ -70,24 +71,7 @@ async function setup(page: Page, language = 'en-US') {
   await page.route('**/api/v1/platform/adapters', (route) =>
     json(route, {
       adapters: [
-        {
-          name: 'synthetic-native',
-          label: { en_US: 'Synthetic Native Source', zh_Hans: '合成原生来源' },
-          description: { en_US: 'Synthetic native channel fixture' },
-          spec: {
-            native_ingress: true,
-            categories: ['testing'],
-            supported_events: ['message.received'],
-            supported_apis: [],
-            config: fields.map(([name, label]) => ({
-              name,
-              label: { en_US: label },
-              type: 'string',
-              required: true,
-              default: '',
-            })),
-          },
-        },
+        ...manifestFixtures.adapters,
         {
           name: 'synthetic-ordinary',
           label: { en_US: 'Synthetic Ordinary Adapter' },
@@ -142,6 +126,22 @@ for (const width of [1440, 390]) {
       path: test.info().outputPath(`native-${width}.png`),
       fullPage: true,
     });
+    Object.assign(runtime, {
+      state: 'error',
+      error_code: 'synthetic_error_' + 'e'.repeat(75),
+    });
+    await expect(
+      status.getByText('Connection error', { exact: true }),
+    ).toBeVisible({ timeout: 10000 });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: test.info().outputPath(`native-${width}-error.png`),
+      fullPage: true,
+    });
     runtime.state = 'needs_authorization';
     await expect(status.getByText('Authorization required')).toBeVisible({
       timeout: 10000,
@@ -162,7 +162,7 @@ test('native channel can be created using only the existing form', async ({
   await page.goto('/home/bots?id=new');
   await page
     .getByTestId('adapter-gallery')
-    .getByRole('button', { name: /Synthetic Native Source/ })
+    .getByRole('button', { name: /WeCom Archive/ })
     .click();
   await page.locator('input[name="name"]').fill('Synthetic New Source');
   const createRequest = page.waitForRequest(
@@ -269,4 +269,24 @@ test('SPA Bot switch does not retain native capability or records on an ordinary
     page.getByRole('button', { name: 'Test listener' }),
   ).toBeVisible();
   await expect(page.locator('[data-guide="bot-routing"]')).toHaveCount(1);
+});
+
+test('both fixed native manifests are visible in the ordinary creation gallery', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await setup(page);
+  await page.goto('/home/bots?id=new');
+  const gallery = page.getByTestId('adapter-gallery');
+  await expect(
+    gallery.getByRole('button', { name: /WeCom Archive/ }),
+  ).toBeVisible();
+  const personal = gallery.getByRole('button', { name: /Personal WeChat/ });
+  await expect(personal).toBeVisible();
+  await personal.click();
+  await expect(personal).toHaveAttribute('aria-pressed', 'true');
+  await page.screenshot({
+    path: test.info().outputPath('native-source-options.png'),
+    fullPage: true,
+  });
 });
