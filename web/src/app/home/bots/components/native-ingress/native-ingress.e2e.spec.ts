@@ -88,6 +88,17 @@ async function setup(page: Page, language = 'en-US') {
             })),
           },
         },
+        {
+          name: 'synthetic-ordinary',
+          label: { en_US: 'Synthetic Ordinary Adapter' },
+          description: { en_US: 'Synthetic ordinary fixture' },
+          spec: {
+            native_ingress: false,
+            categories: ['testing'],
+            config: [],
+            supported_events: ['message.received'],
+          },
+        },
       ],
     }),
   );
@@ -110,9 +121,10 @@ for (const width of [1440, 390]) {
     await expect(
       status.getByText('Source reachable; upstream not verified'),
     ).toBeVisible();
+    await expect(status.getByRole('status')).not.toHaveClass(/emerald/);
     await expect(page.locator('[data-guide="bot-routing"]')).toHaveCount(0);
     await expect(
-      page.getByRole('button', { name: 'Debug events' }),
+      page.getByRole('button', { name: 'Test listener' }),
     ).toHaveCount(0);
     await page.getByRole('tab', { name: 'Logs', exact: true }).click();
     await expect(page.getByTestId('native-ingress-record')).toHaveCount(2);
@@ -153,10 +165,19 @@ test('native channel can be created using only the existing form', async ({
     .getByRole('button', { name: /Synthetic Native Source/ })
     .click();
   await page.locator('input[name="name"]').fill('Synthetic New Source');
-  for (const [name, label] of fields)
-    await page.getByLabel(label, { exact: true }).fill(`fixture-${name}`);
+  const createRequest = page.waitForRequest(
+    (request) =>
+      request.method() === 'POST' &&
+      new URL(request.url()).pathname === '/api/v1/platform/bots',
+  );
   await page.getByRole('button', { name: /^Submit$/ }).click();
+  const draft = (await createRequest).postDataJSON();
+  expect(draft.enable).toBe(false);
+  expect(draft.adapter_config).toEqual({});
   await expect(page).toHaveURL(/\/home\/bots\?id=bot-1$/);
+  for (const [name, label] of fields)
+    await page.getByLabel(label).fill(`fixture-${name}`);
+  await page.getByRole('button', { name: /Save/ }).first().click();
   await expect(page.locator('[data-guide="bot-routing"]')).toHaveCount(0);
   await expect(page.getByTestId('native-ingress-status')).toBeVisible();
 });
@@ -202,4 +223,38 @@ test('an earlier success cannot restore records after account audience changes',
     'fixture-v2',
   );
   await expect(page.getByTestId('native-ingress-record')).toHaveCount(0);
+});
+
+test('SPA Bot switch does not retain native capability or records on an ordinary Bot', async ({
+  page,
+}) => {
+  const runtime = await setup(page);
+  const ordinary = {
+    ...fixtureBot(undefined),
+    uuid: 'ordinary-fixture',
+    name: 'Other Ordinary Source',
+    adapter: 'synthetic-ordinary',
+    adapter_config: {},
+    adapter_runtime_values: {},
+  };
+  await page.route('**/api/v1/platform/bots', (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    return json(route, { bots: [fixtureBot(runtime), ordinary] });
+  });
+  await page.route('**/api/v1/platform/bots/ordinary-fixture', (route) =>
+    json(route, { bot: ordinary }),
+  );
+  await page.goto(`/home/bots?id=${fixtureId}&tab=logs`);
+  await expect(page.getByTestId('native-ingress-record')).toHaveCount(2);
+  await page
+    .getByText('Other Ordinary Source', { exact: true })
+    .first()
+    .click();
+  await expect(page).toHaveURL(/id=ordinary-fixture/);
+  await expect(page.getByTestId('native-ingress-record')).toHaveCount(0);
+  await expect(page.getByTestId('native-ingress-status')).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Test listener' }),
+  ).toBeVisible();
+  await expect(page.locator('[data-guide="bot-routing"]')).toHaveCount(1);
 });

@@ -82,8 +82,14 @@ export default function BotDetailContent({ id }: { id: string }) {
       { replace: true },
     );
   const [adapterLabel, setAdapterLabel] = useState('');
-  const [isNativeIngress, setIsNativeIngress] = useState<boolean | null>(null);
   const sourceKey = `${currentWorkspace?.workspace.uuid ?? ''}:${currentWorkspace?.membership.account_uuid ?? ''}:${currentWorkspace?.placement_generation ?? ''}:${id}`;
+  const [nativeCapability, setNativeCapability] = useState<{
+    key: string;
+    value: boolean | null;
+  } | null>(null);
+  const isNativeIngress =
+    nativeCapability?.key === sourceKey ? nativeCapability.value : null;
+  const [loadedSourceKey, setLoadedSourceKey] = useState<string | null>(null);
   const sourceKeyRef = useRef(sourceKey);
   sourceKeyRef.current = sourceKey;
   const nativeRequestSequence = useRef(0);
@@ -117,11 +123,18 @@ export default function BotDetailContent({ id }: { id: string }) {
     if (!isCreateMode) {
       setLoadFailed(false);
       setEnableLoaded(false);
-      httpClient
-        .getBot(id)
-        .then((res) => {
+      Promise.all([httpClient.getBot(id), httpClient.getAdapters()])
+        .then(([res, adapters]) => {
           if (!active || sourceKeyRef.current !== sourceKey) return;
           setBot(res.bot);
+          const adapter = adapters.adapters.find(
+            (item) => item.name === res.bot.adapter,
+          );
+          setNativeCapability({
+            key: sourceKey,
+            value: adapter ? adapter.spec.native_ingress === true : null,
+          });
+          setLoadedSourceKey(sourceKey);
           if (requestSequence === nativeRequestSequence.current) {
             setNativeSnapshot({
               key: sourceKey,
@@ -285,7 +298,6 @@ export default function BotDetailContent({ id }: { id: string }) {
                 onNewBotCreated={handleNewBotCreated}
                 guideEnabled={canManage}
                 onAdapterLabelChange={setAdapterLabel}
-                onNativeIngressChange={setIsNativeIngress}
                 nativeIngressRuntime={nativeIngressRuntime}
               />
             </fieldset>
@@ -299,7 +311,8 @@ export default function BotDetailContent({ id }: { id: string }) {
     return (
       <EntityLoadState error onRetry={() => setLoadAttempt((n) => n + 1)} />
     );
-  if (!enableLoaded) return <EntityLoadState />;
+  if (!enableLoaded || loadedSourceKey !== sourceKey)
+    return <EntityLoadState />;
 
   // ==================== Edit Mode ====================
   return (
@@ -419,7 +432,7 @@ export default function BotDetailContent({ id }: { id: string }) {
                 </TabsTrigger>
               )}
             </TabsList>
-            {activeTab === 'sessions' && isNativeIngress !== true && (
+            {activeTab === 'sessions' && isNativeIngress === false && (
               <button
                 type="button"
                 aria-label={t('bots.sessionMonitor.refresh')}
@@ -461,7 +474,6 @@ export default function BotDetailContent({ id }: { id: string }) {
                   onNewBotCreated={handleNewBotCreated}
                   onDirtyChange={setFormDirty}
                   onAdapterLabelChange={setAdapterLabel}
-                  onNativeIngressChange={setIsNativeIngress}
                   nativeIngressRuntime={nativeIngressRuntime}
                   guideEnabled={canManage}
                 />
@@ -490,7 +502,9 @@ export default function BotDetailContent({ id }: { id: string }) {
           {/* Tab: Sessions */}
           {canViewMonitoring && (
             <TabsContent value="sessions" className="flex-1 min-h-0 mt-4">
-              {isNativeIngress ? (
+              {isNativeIngress === null ? (
+                <EntityLoadState />
+              ) : isNativeIngress ? (
                 <p className="text-sm leading-relaxed text-muted-foreground">
                   {t('nativeIngress.sessions')}
                 </p>

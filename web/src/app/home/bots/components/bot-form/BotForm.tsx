@@ -693,7 +693,9 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
       name: form.getValues('name'),
       description: form.getValues('description') ?? '',
       adapter: currentAdapter,
-      adapter_config: form.getValues('adapter_config') || {},
+      adapter_config: isNativeIngress
+        ? {}
+        : form.getValues('adapter_config') || {},
       enable: false,
       event_bindings: [],
       plugin_processors: [],
