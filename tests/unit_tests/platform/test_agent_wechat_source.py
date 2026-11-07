@@ -164,6 +164,8 @@ def test_native_manifest_is_discoverable_by_existing_core_ui_contract():
     assert info['label']['zh_Hans'] == '个人微信'
     assert info['label']['en_US'] == 'Personal WeChat'
     assert info['spec'].get('legacy') is False
+    assert info['icon'] == 'wechat.png'
+    assert component.icon_rel_path == 'pkg/platform/sources/wechat.png'
     assert {field['name'] for field in info['spec']['config']} == {
         'source_flavor',
         'credential_ref',
