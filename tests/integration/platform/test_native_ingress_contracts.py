@@ -249,9 +249,11 @@ async def test_native_runtime_has_no_unregistered_authority_or_legacy_egress():
     assert NativeIngressRouterGroup.path == '/api/v1/native-ingress'
     adapter = SimpleNamespace(native_source_binding=lambda: SourceBinding('source','account','scope','r1'))
     guard = NativeAdapterGuard(adapter)
-    for method in ('send_message','reply_message','send_streaming_message','reply_streaming_message'):
+    for method in ('send_message','reply_message','send_streaming_message','reply_streaming_message','reply_message_chunk','create_message_card'):
         with pytest.raises(PermissionError,match='host_operation_required'):
             await getattr(guard, method)('anything')
+    assert guard.get_supported_apis()==[]
+    assert await guard.is_stream_output_supported() is False
     runtime = SimpleNamespace(ap=SimpleNamespace(native_ingress_authorizer_factory=42))
     with pytest.raises(PermissionError,match='authorizer_not_configured'):
         await attach_native_runtime(runtime)
@@ -547,3 +549,87 @@ async def test_client_reference_is_exact_and_never_allows_arbitrary_files_or_dis
     with pytest.raises(PermissionError,match='mount_unavailable'):
         await registry(context(),'bot-workspace-a',binding,'read-fixture')
     assert len(calls)==1
+
+
+@pytest.mark.asyncio
+async def test_default_registry_does_not_move_account_wide_wx_credentials_into_langbot(manager):
+    from langbot.pkg.platform.native_access import register_native_access
+    from langbot.pkg.platform.native_clients import NativeClientRegistry
+    binding=store(manager).binding
+    ap=SimpleNamespace(persistence_mgr=manager)
+    await register_native_access(ap,context(),'bot-workspace-a',binding,source_enabled=True)
+    entry=dict(credential_ref='unscoped-wx',enabled=True,workspace_uuid='workspace-a',bot_uuid='bot-workspace-a',
+               binding_sha256=store(manager).binding_hash,provider='agent-wechat-v1',
+               endpoint='https://fixture.invalid/v1',secret_file='does-not-exist')
+    registry=NativeClientRegistry(ap,[entry])
+    with pytest.raises(PermissionError,match='thread_scoped_transport_required'):
+        await registry(context(),'bot-workspace-a',binding,'unscoped-wx')
+
+
+@pytest.mark.asyncio
+async def test_saved_media_evidence_six_supported_fields_survive_core_without_silent_narrowing(manager):
+    ingress=store(manager)
+    await ingress.initialize('10')
+    candidate=router_event()
+    evidence=dict(mediaId='owner-media-1',mediaType='image',sourceMd5='A'*32,
+                  contentSha256='b'*64,sourceFileSize=123,contentSize=120)
+    candidate.payload['change']['saved']={'message':{'media_evidence':[evidence]}}
+    await ingress.accept_page(SourcePage('10','11',(candidate,)),authorize=allowed)
+    page=await ingress.read_router_page(None,authorize=allowed)
+    assert page['items'][0]['envelope']['saved']['message']['media_evidence']==[evidence]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('key,value',[('sourceMd5','z'*32),('contentSha256','wrong'),
+    ('sourceFileSize',True),('contentSize',-1),('mediaId',{'content':'untrusted'}),('mediaType','a'*513)])
+async def test_malformed_media_evidence_is_rejected_before_source_cursor_advance(manager,key,value):
+    ingress=store(manager)
+    await ingress.initialize('10')
+    candidate=router_event()
+    candidate.payload['change']['saved']={'message':{'media_evidence':[{key:value}]}}
+    with pytest.raises(ValueError,match='metadata_only'):
+        await ingress.accept_page(SourcePage('10','11',(candidate,)),authorize=allowed)
+    assert await ingress.checkpoint()=='10'
+
+
+@pytest.mark.asyncio
+async def test_owner_gap_has_no_fake_original_and_is_preserved_once_across_good_pages(manager):
+    from langbot.pkg.entity.persistence.native_ingress import NativeGap
+    ingress=NativeIngressStore(manager,workspace_uuid='workspace-a',bot_uuid='bot-workspace-a',
+        binding=store(manager).binding,owner_gap_codes={'history_before_feed_unverified','original_unavailable'})
+    await ingress.initialize('10')
+    source_receipt=await ingress.accept_page(SourcePage('10','11',(),gaps=('history_before_feed_unverified',)),authorize=allowed)
+    page=await ingress.read_router_page(None,authorize=allowed)
+    assert page['items']==[] and page['next_cursor']=='1'
+    assert page['gaps']==[dict(event_id=source_receipt.event_ids[0],reason='owner_source_gap',source='test-source',
+                               scope='chat-a',code='history_before_feed_unverified')]
+    assert 'record' not in page['gaps'][0] and 'original' not in page['gaps'][0]
+    await ingress.ack_router_page(page['page_id'],page['page_sha256'],[],authorize=allowed)
+    await ingress.accept_page(SourcePage('11','12',(event(),),gaps=('history_before_feed_unverified',)),authorize=allowed)
+    good_page=await ingress.read_router_page('1',authorize=allowed)
+    assert len(good_page['items'])==1 and good_page['gaps']==[]
+    async with manager.tenant_uow('workspace-a') as uow:
+        unresolved=(await uow.session.execute(sa.select(NativeGap))).scalars().all()
+        assert [row.code for row in unresolved]==['history_before_feed_unverified']
+    with pytest.raises(ValueError,match='gap_not_supported'):
+        await ingress.accept_page(SourcePage('12','13',(),gaps=('arbitrary_external_text',)),authorize=allowed)
+    assert await ingress.checkpoint()=='12'
+
+
+@pytest.mark.asyncio
+async def test_migration_rejects_same_columns_without_required_constraints(tmp_path):
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from langbot.pkg.persistence.alembic_runner import run_alembic_stamp,run_alembic_upgrade
+    engine=create_async_engine('sqlite+aiosqlite:///'+str(tmp_path/'weak.db'))
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda c: Base.metadata.create_all(c,tables=[User.__table__,Workspace.__table__,Bot.__table__]))
+            await conn.exec_driver_sql('''CREATE TABLE native_ingress_sources (
+                id VARCHAR(64) PRIMARY KEY NOT NULL,workspace_uuid VARCHAR(36) NOT NULL,bot_uuid VARCHAR(255) NOT NULL,
+                binding JSON NOT NULL,binding_sha256 VARCHAR(64) NOT NULL,cursor TEXT,
+                position INTEGER NOT NULL DEFAULT 0,router_cursor INTEGER NOT NULL DEFAULT 0,router_pending_page VARCHAR(64))''')
+        await run_alembic_stamp(engine,'0037_metadata_text')
+        with pytest.raises(RuntimeError,match='exact type, nullability'):
+            await run_alembic_upgrade(engine)
+    finally:
+        await engine.dispose()

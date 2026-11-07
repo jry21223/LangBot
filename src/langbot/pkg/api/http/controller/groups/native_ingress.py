@@ -60,14 +60,14 @@ class NativeIngressRouterGroup(group.RouterGroup):
         async def original(bot_uuid,operation,request_context):
             from .....platform.native_originals import read_native_original
             if operation not in {'authority','original','manifest','chunk','media'}:
-                return self.http_status(404,'native_operation_unknown','native_operation_unknown')
+                return self.http_status(404,'native_operation_unknown',message('operation_unknown'))
             try:
                 part=quart.request.args.get('part_index')
                 result=await read_native_original(self.ap,request_context,bot_uuid,operation,
                     quart.request.args.get('reference'),quart.request.args.get('version'),
                     part_index=int(part) if part is not None else None,asset_id=quart.request.args.get('asset_id'))
             except ValueError:
-                return self.http_status(409,'native_original_unavailable','native_original_unavailable')
+                return self.http_status(409,'native_original_unavailable',message('original_unavailable'))
             if operation=='media':
                 response=quart.Response(result['bytes'],content_type=result['content_type'])
                 response.headers['X-Content-SHA256']=result['sha256']

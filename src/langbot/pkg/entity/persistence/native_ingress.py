@@ -13,8 +13,8 @@ class NativeSource(Base):
     binding = sa.Column(sa.JSON, nullable=False)
     binding_sha256 = sa.Column(sa.String(64), nullable=False)
     cursor = sa.Column(sa.Text, nullable=True)
-    position = sa.Column(sa.Integer, nullable=False, default=0)
-    router_cursor = sa.Column(sa.Integer, nullable=False, default=0)
+    position = sa.Column(sa.Integer, nullable=False, default=0, server_default="0")
+    router_cursor = sa.Column(sa.Integer, nullable=False, default=0, server_default="0")
     router_pending_page = sa.Column(sa.String(64), nullable=True)
     __table_args__ = (
         sa.UniqueConstraint('workspace_uuid', 'id'),
@@ -83,12 +83,12 @@ class NativeAccess(Base):
     binding_sha256 = sa.Column(sa.String(64), nullable=False)
     registration_request_id = sa.Column(sa.String(255), nullable=False)
     registered_by_account_uuid = sa.Column(sa.String(36), nullable=False)
-    source_enabled = sa.Column(sa.Boolean, nullable=False, default=False)
-    source_revision = sa.Column(sa.Integer, nullable=False, default=1)
+    source_enabled = sa.Column(sa.Boolean, nullable=False, default=False, server_default=sa.false())
+    source_revision = sa.Column(sa.Integer, nullable=False, default=1, server_default="1")
     receiver_id = sa.Column(sa.String(255), nullable=True)
     receiver_api_key_uuid = sa.Column(sa.String(36), nullable=True)
-    receiver_enabled = sa.Column(sa.Boolean, nullable=False, default=False)
-    receiver_revision = sa.Column(sa.Integer, nullable=False, default=1)
+    receiver_enabled = sa.Column(sa.Boolean, nullable=False, default=False, server_default=sa.false())
+    receiver_revision = sa.Column(sa.Integer, nullable=False, default=1, server_default="1")
     __table_args__ = (
         sa.UniqueConstraint('workspace_uuid','bot_uuid'),
         sa.ForeignKeyConstraint(['workspace_uuid','bot_uuid'], ['bots.workspace_uuid','bots.uuid']),
@@ -96,3 +96,22 @@ class NativeAccess(Base):
 
 
 NATIVE_TABLES.append(NativeAccess.__table__)
+
+
+class NativeGap(Base):
+    """Owner coverage code, with no fabricated message record or original."""
+    __tablename__ = 'native_ingress_gaps'
+    id = sa.Column(sa.String(64),primary_key=True)
+    workspace_uuid = sa.Column(sa.String(36),nullable=False)
+    source_id = sa.Column(sa.String(64),nullable=False)
+    code = sa.Column(sa.String(64),nullable=False)
+    position = sa.Column(sa.Integer,nullable=False)
+    upstream_cursor = sa.Column(sa.Text,nullable=False)
+    __table_args__ = (
+        sa.UniqueConstraint('source_id','code'),
+        sa.UniqueConstraint('source_id','position'),
+        sa.ForeignKeyConstraint(['workspace_uuid','source_id'],['native_ingress_sources.workspace_uuid','native_ingress_sources.id']),
+    )
+
+
+NATIVE_TABLES.append(NativeGap.__table__)
