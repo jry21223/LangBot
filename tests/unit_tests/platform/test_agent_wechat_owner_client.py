@@ -54,6 +54,27 @@ async def owner_server():
         assert request.query['source'] == 'existing-wechat'
         assert request.query['scope'] == 'existing-scope'
         assert request.query['workspace'] == client.workspace
+        if request.path == '/native/binding':
+            return web.json_response(
+                {
+                    'source': client.source,
+                    'scope': client.scope,
+                    'principal': client.operator,
+                    'workspace': client.workspace,
+                    'revision': client.grant_revision,
+                    'account': client.account_id,
+                    'thread': client.thread,
+                    'origin': 'owner_source_binding',
+                }
+            )
+        if request.path == '/native/descriptor':
+            change = page['items'][0]['change']
+            return web.json_response(
+                dict(
+                    reference=change['original'],
+                    **{key: change[key] for key in ('version', 'projection_hash', 'kind', 'original_available')},
+                )
+            )
         if request.path == '/native/changes':
             return web.json_response(page)
         if request.path == '/native/authority':
@@ -290,3 +311,16 @@ async def test_actual_baseline_is_never_dispatched_and_unknown_snapshot_kind_is_
     item['change']['kind'] = 'baseline_snapshot'
     with pytest.raises(OwnerProtocolError):
         await client.native_changes(cursor='owner-before')
+
+
+@pytest.mark.asyncio
+async def test_binding_and_descriptor_are_metadata_only_and_have_exact_registered_shape(owner_server):
+    client, page, _, requests = owner_server
+    binding = await client.native_binding()
+    assert binding['account'] == client.account_id and binding['workspace'] == client.workspace
+    change = page['items'][0]['change']
+    descriptor = await client.native_descriptor(change['original'], change['version'])
+    assert set(descriptor) == {'reference', 'version', 'projection_hash', 'kind', 'original_available'}
+    assert descriptor['reference'] == change['original']
+    assert {r[1] for r in requests} == {'/native/authority', '/native/binding', '/native/descriptor'}
+    assert all(r[0] == 'GET' for r in requests)

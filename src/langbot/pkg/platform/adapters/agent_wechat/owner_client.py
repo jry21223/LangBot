@@ -181,7 +181,7 @@ class OwnerNativeClient:
             self._session = None
 
     async def _get(self, operation, params):
-        if operation not in {'changes', 'authority'}:
+        if operation not in {'binding', 'changes', 'authority', 'descriptor'}:
             raise OwnerProtocolError('owner_metadata_operation_forbidden')
         if self._session is None:
             self._session = aiohttp.ClientSession(
@@ -289,6 +289,50 @@ class OwnerNativeClient:
         result.pop('collector', None)
         if self.collector is not None:
             result['collector'] = deepcopy(self.collector)
+        return deepcopy(result)
+
+    async def native_binding(self):
+        await self.native_authority()
+        result = await self._get('binding', {})
+        expected = {
+            'source': self.source,
+            'scope': self.scope,
+            'principal': self.operator,
+            'workspace': self.workspace,
+            'revision': self.grant_revision,
+            'account': self.account_id,
+            'thread': self.thread,
+            'origin': 'owner_source_binding',
+        }
+        if result != expected:
+            raise OwnerProtocolError('owner_binding_metadata_invalid')
+        await self.native_authority()
+        return deepcopy(result)
+
+    async def native_descriptor(self, reference, version, *, include_history=False):
+        if type(include_history) is not bool:
+            raise OwnerProtocolError('owner_history_flag_invalid')
+        await self.native_authority()
+        result = await self._get(
+            'descriptor',
+            {
+                'reference': _id(reference),
+                'version': _id(version),
+                'include_history': 'true' if include_history else 'false',
+            },
+        )
+        fields = {'reference', 'version', 'projection_hash', 'kind', 'original_available'}
+        if (
+            set(result) != fields
+            or result['reference'] != reference
+            or result['version'] != version
+            or type(result['original_available']) is not bool
+            or not isinstance(result['kind'], str)
+            or result['kind'] not in {'created', 'baseline', 'changed', 'attachments_changed', 'recalled'}
+        ):
+            raise OwnerProtocolError('owner_descriptor_metadata_invalid')
+        _hash(result['projection_hash'])
+        await self.native_authority()
         return deepcopy(result)
 
     async def native_changes(self, *, cursor=None, limit=100):

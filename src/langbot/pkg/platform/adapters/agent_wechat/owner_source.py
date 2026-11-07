@@ -105,8 +105,9 @@ class OwnerNativeSource:
     async def native_original(self, *args):
         raise NativeAccessDenied('native_metadata_reader_only')
 
-    async def native_original_manifest(self, *args):
-        raise NativeAccessDenied('native_metadata_reader_only')
+    async def native_original_manifest(self, reference, version):
+        await self.authorize()
+        return await self.client.native_descriptor(reference, version)
 
     async def native_original_chunk(self, *args):
         raise NativeAccessDenied('native_metadata_reader_only')

@@ -85,7 +85,6 @@ async def test_metadata_reader_cannot_become_an_oa_text_or_media_reader():
     worker, client, _, _ = setup_source()
     for method, args in [
         ('native_original', ('ref', 'version')),
-        ('native_original_manifest', ('ref', 'version')),
         ('native_original_chunk', ('ref', 'version', 0)),
         ('native_media', ('ref', 'version', 'asset')),
     ]:
@@ -200,3 +199,17 @@ async def test_runtime_state_is_pure_and_uses_current_collector_proof_not_cached
         'collector_verified': False,
     }
     assert (adapter.state, adapter.error_code) == ('unknown', 'upstream_state_unverified')
+
+
+@pytest.mark.asyncio
+async def test_metadata_manifest_uses_descriptor_and_rechecks_current_source_access():
+    worker, client, _, authorize = setup_source()
+    descriptor = {'reference': 'ref', 'version': 'version', 'original_available': False}
+    client.native_descriptor.return_value = descriptor
+    assert await worker.native_original_manifest('ref', 'version') == descriptor
+    client.native_descriptor.assert_awaited_once_with('ref', 'version')
+    client.native_descriptor.reset_mock()
+    authorize.side_effect = NativeAccessDenied('revoked')
+    with pytest.raises(NativeAccessDenied, match='revoked'):
+        await worker.native_original_manifest('ref', 'version')
+    client.native_descriptor.assert_not_called()

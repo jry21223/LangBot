@@ -351,7 +351,7 @@ async def test_scoped_owner_http_runtime_persists_typed_gaps_and_preserves_indep
     assert restarted.last_sequence == 101
     page.update(previous_cursor='owner-after', next_cursor='owner-after', items=[], gaps=[])
     assert await restarted.poll_once() is None
-    for method in ('native_original', 'native_original_manifest', 'native_media'):
+    for method in ('native_original', 'native_media'):
         with pytest.raises(NativeAccessDenied, match='metadata_reader_only'):
             await getattr(adapter, method)(
                 *(['reference', 'version', 'asset'] if method == 'native_media' else ['reference', 'version'])

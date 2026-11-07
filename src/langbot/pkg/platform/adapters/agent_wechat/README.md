@@ -15,11 +15,12 @@ cannot contain raw tokens, secret paths or endpoint overrides. Native config
 also refuses collector `consumer_id`, `activation_at` and send enabling.
 A conversation list is a filter, never an authorization grant.
 
-The fixed native client calls only `GET /native/authority` and
-`GET /native/changes`, using the registered `X-Operator`, narrow Bearer reader,
+The fixed native client calls only `GET /native/binding`, `GET /native/authority`,
+`GET /native/changes` and `GET /native/descriptor`, using the registered `X-Operator`, narrow Bearer reader,
 fixed source/scope/profile audience and `stage=ingest`. It checks the actual
-current grant and binding revisions before and after reads. It has no original,
-media, derived, materialization or send methods. The OA reader uses the original
+current grant and binding revisions before and after reads. The descriptor contains only exact reference/version, projection hash, change
+kind and original-availability metadata. It has no original body, media, derived,
+materialization or send methods. The OA reader uses the original
 source directly with its separately registered dispatch/result/display purpose
 and actual agent; metadata credentials do not inherit that access.
 
