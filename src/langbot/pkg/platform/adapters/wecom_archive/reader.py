@@ -142,6 +142,8 @@ class HttpSource:
                 or page.get('source') != self.source
                 or page.get('scope') != self.scope
                 or page.get('previous_cursor') != cursor
+                or page.get('gaps') != []
+                or page.get('coverage') not in {'success', 'success_zero'}
             ):
                 raise SourceUnavailable('missing_page')
             if self.authorize(self.source, 'ingest') != before:

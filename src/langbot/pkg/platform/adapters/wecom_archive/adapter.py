@@ -11,7 +11,7 @@ from langbot_plugin.api.entities.builtin.platform.errors import NotSupportedErro
 
 from langbot.pkg.platform.native_contract import SourceBinding
 from .reader import HttpSource, SourceUnavailable
-from .projection import project_page
+from .projection import project_page, validate_change
 
 
 class WecomArchiveAdapter(AbstractPlatformAdapter):
@@ -53,6 +53,9 @@ class WecomArchiveAdapter(AbstractPlatformAdapter):
         if not callable(authorize):
             raise ValueError('native_source_authorizer_required')
         self._store, self._authorize = store, authorize
+
+    def native_validate_change(self, change: dict) -> None:
+        validate_change(change, self.native_source_binding())
 
     async def native_connection_facts(self) -> dict:
         """Read authority facts; an absent owner account proof stays absent."""

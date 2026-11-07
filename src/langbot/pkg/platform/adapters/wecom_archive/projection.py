@@ -203,6 +203,8 @@ def project_page(page: dict, binding: SourceBinding) -> SourcePage:
             or page.get('source') != binding.source
             or page.get('scope') != binding.scope
             or page.get('complete_page') is not True
+            or page.get('gaps') != []
+            or page.get('coverage') not in {'success', 'success_zero'}
             or not isinstance(page.get('items'), list)
             or len(page['items']) > 100
         ):
@@ -213,5 +215,15 @@ def project_page(page: dict, binding: SourceBinding) -> SourcePage:
         next_cursor = _text(page['next_cursor'], 4096)
         events = tuple(_envelope(item, binding) for item in page['items'])
         return SourcePage(previous, next_cursor, events, complete=True)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise SourceUnavailable('invalid_page') from None
+
+
+def validate_change(change: dict, binding: SourceBinding) -> None:
+    """Validate the exact narrowed saved contract before durable admission."""
+    try:
+        canonical = _envelope(change, binding).payload['change']
+        if canonical != change:
+            raise ValueError()
     except (ValueError, KeyError, TypeError, AttributeError):
         raise SourceUnavailable('invalid_page') from None
