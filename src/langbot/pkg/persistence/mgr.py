@@ -49,6 +49,10 @@ importutil.import_modules_in_pkg(persistence)
 
 
 _ALEMBIC_TENANT_TABLES = {
+    'native_ingress_sources',
+    'native_ingress_pages',
+    'native_ingress_events',
+    'native_send_operations',
     'workspaces',
     'workspace_memberships',
     'workspace_invitations',

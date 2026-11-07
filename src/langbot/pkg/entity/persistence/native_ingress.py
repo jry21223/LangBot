@@ -1,0 +1,73 @@
+"""Workspace-owned native source receipts, checkpoints and send operations."""
+
+import sqlalchemy as sa
+
+from .base import Base
+
+
+class NativeSource(Base):
+    __tablename__ = 'native_ingress_sources'
+    id = sa.Column(sa.String(64), primary_key=True)
+    workspace_uuid = sa.Column(sa.String(36), sa.ForeignKey('workspaces.uuid'), nullable=False)
+    bot_uuid = sa.Column(sa.String(255), nullable=False)
+    binding = sa.Column(sa.JSON, nullable=False)
+    binding_sha256 = sa.Column(sa.String(64), nullable=False)
+    cursor = sa.Column(sa.Text, nullable=True)
+    position = sa.Column(sa.Integer, nullable=False, default=0)
+    router_cursor = sa.Column(sa.Integer, nullable=False, default=0)
+    router_pending_page = sa.Column(sa.String(64), nullable=True)
+    __table_args__ = (
+        sa.UniqueConstraint('workspace_uuid', 'id'),
+        sa.UniqueConstraint('workspace_uuid', 'bot_uuid'),
+        sa.ForeignKeyConstraint(['workspace_uuid', 'bot_uuid'], ['bots.workspace_uuid', 'bots.uuid']),
+    )
+
+
+class NativePage(Base):
+    __tablename__ = 'native_ingress_pages'
+    id = sa.Column(sa.String(64), primary_key=True)
+    workspace_uuid = sa.Column(sa.String(36), nullable=False)
+    source_id = sa.Column(sa.String(64), nullable=False)
+    direction = sa.Column(sa.String(12), nullable=False, default="source")
+    previous_cursor = sa.Column(sa.Text, nullable=True)
+    fingerprint = sa.Column(sa.String(64), nullable=False)
+    cursor = sa.Column(sa.Text, nullable=False)
+    event_ids = sa.Column(sa.JSON, nullable=False)
+    __table_args__ = (
+        sa.ForeignKeyConstraint(['workspace_uuid', 'source_id'], ['native_ingress_sources.workspace_uuid', 'native_ingress_sources.id']),
+    )
+
+
+class NativeEvent(Base):
+    __tablename__ = 'native_ingress_events'
+    id = sa.Column(sa.String(64), primary_key=True)
+    workspace_uuid = sa.Column(sa.String(36), nullable=False)
+    source_id = sa.Column(sa.String(64), nullable=False)
+    position = sa.Column(sa.Integer, nullable=False)
+    envelope = sa.Column(sa.JSON, nullable=False)
+    fingerprint = sa.Column(sa.String(64), nullable=False)
+    status = sa.Column(sa.String(24), nullable=False, server_default='pending')
+    receiver_receipt = sa.Column(sa.JSON, nullable=True)
+    __table_args__ = (
+        sa.ForeignKeyConstraint(['workspace_uuid', 'source_id'], ['native_ingress_sources.workspace_uuid', 'native_ingress_sources.id']),
+        sa.UniqueConstraint('source_id', 'position'),
+        sa.Index('ix_native_ingress_events_pending', 'workspace_uuid', 'source_id', 'status', 'id'),
+    )
+
+
+class NativeSend(Base):
+    __tablename__ = 'native_send_operations'
+    id = sa.Column(sa.String(64), primary_key=True)
+    workspace_uuid = sa.Column(sa.String(36), nullable=False)
+    source_id = sa.Column(sa.String(64), nullable=False)
+    operation_id = sa.Column(sa.String(255), nullable=False)
+    provider_key = sa.Column(sa.String(96), nullable=False)
+    fingerprint = sa.Column(sa.String(64), nullable=False)
+    status = sa.Column(sa.String(24), nullable=False)
+    receipt = sa.Column(sa.JSON, nullable=True)
+    __table_args__ = (
+        sa.ForeignKeyConstraint(['workspace_uuid', 'source_id'], ['native_ingress_sources.workspace_uuid', 'native_ingress_sources.id']),
+    )
+
+
+NATIVE_TABLES = [NativeSource.__table__, NativePage.__table__, NativeEvent.__table__, NativeSend.__table__]
