@@ -4,12 +4,14 @@ import pytest
 from aiohttp import web
 
 from langbot.pkg.platform.adapters.agent_wechat.owner_client import OwnerNativeClient, OwnerProtocolError
-from tests.unit_tests.platform.test_agent_wechat_owner_contract import owner_change, FIXTURE_CONTRACT
+from tests.unit_tests.platform.test_agent_wechat_owner_contract import owner_change
+from langbot.pkg.platform.adapters.agent_wechat.owner_contract import NATIVE_V1
 
 
 @pytest.fixture
 async def owner_server():
     item = owner_change()
+    item.change['original'] = item.change['original'].replace('owner-fixture:', 'wechat-native:')
     page = {
         'source': 'existing-wechat',
         'scope': 'existing-scope',
@@ -78,7 +80,7 @@ async def owner_server():
         agent='metadata-agent',
         grant_revision='grant-r1',
         binding_revision='binding-r1',
-        contract=FIXTURE_CONTRACT,
+        contract=NATIVE_V1,
     )
     yield client, page, authority, requests
     await client.close()
@@ -157,3 +159,35 @@ async def test_partial_and_nested_metadata_fail_before_admission(owner_server):
     ]
     with pytest.raises(OwnerProtocolError):
         await client.native_changes(cursor='owner-before')
+
+
+@pytest.mark.asyncio
+async def test_oneof_unresolved_has_no_fake_message_identity_and_uses_owner_sequence(owner_server):
+    client, page, _, _ = owner_server
+    original = page['items'][0]
+    unresolved = {
+        'event_id': 'owner-unresolved-1',
+        'kind': 'unresolved',
+        'source_sequence': 100,
+        'event_cursor': 'raw-wx-token',
+        'reason': 'native_unresolved',
+        'source': 'existing-wechat',
+        'scope': 'existing-scope',
+    }
+    page['items'] = [unresolved, original]
+    page['gaps'] = ['history_before_activation_unverified']
+    result = await client.native_changes(cursor='owner-before')
+    assert result['items'][0] == unresolved
+    assert 'record' not in result['items'][0] and 'change' not in result['items'][0]
+    page['items'][0]['change'] = None
+    with pytest.raises(OwnerProtocolError):
+        await client.native_changes(cursor='owner-before')
+
+
+@pytest.mark.asyncio
+async def test_old_source_gap_labels_are_not_silently_inherited_by_native_flavor(owner_server):
+    client, page, _, _ = owner_server
+    for gap in ['non_text_not_projected', 'recall_not_qualified', {'token': 'no'}]:
+        page['gaps'] = [gap]
+        with pytest.raises(OwnerProtocolError):
+            await client.native_changes(cursor='owner-before')

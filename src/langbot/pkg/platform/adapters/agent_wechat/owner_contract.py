@@ -31,7 +31,19 @@ def _legacy_text(change):
 
 
 LEGACY_TEXT = OwnerContract('personal-wechat-text-v1', _legacy_text)
-# No native-media contract is registered until its existing owner fixes it.
+
+
+def _native_v1(change):
+    validate_change(
+        change,
+        reference_scheme='wechat-native',
+        change_kinds=frozenset({'created', 'baseline', 'changed', 'attachments_changed', 'recalled'}),
+        verify_projection_hash=False,
+    )
+
+
+NATIVE_V1 = OwnerContract('personal-wechat-native-v1', _native_v1)
+# Flavor selection is explicit; registering native v1 does not migrate legacy history.
 
 
 @dataclass(frozen=True)

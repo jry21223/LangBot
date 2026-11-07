@@ -14,11 +14,12 @@ from urllib.parse import urlsplit
 
 import aiohttp
 
-from .owner_contract import OwnerContract
+from .owner_contract import OwnerContract, NATIVE_V1
 from .projection import identity
+from .client import WxProtocolError
 
 
-class OwnerProtocolError(RuntimeError):
+class OwnerProtocolError(WxProtocolError):
     """Bounded local error codes only, never remote content or credentials."""
 
 
@@ -121,7 +122,7 @@ class OwnerNativeClient:
         self.workspace, self.account_id, self.thread = _id(workspace), _id(account), _id(thread)
         self.stage, self.agent = _id(stage), None if agent is None else _id(agent)
         self.grant_revision, self.binding_revision = _id(grant_revision), _id(binding_revision)
-        if not isinstance(contract, OwnerContract):
+        if contract is not NATIVE_V1:
             raise OwnerProtocolError('owner_contract_not_registered')
         self.contract = contract
         self._session = None
@@ -230,8 +231,6 @@ class OwnerNativeClient:
             _hash(original['result_sha256'], optional=True)
             if original['parser_version'] is not None:
                 _id(original['parser_version'])
-            if original['recalled'] or not original['available']:
-                raise OwnerProtocolError('owner_original_not_complete')
         elif 'original' in result:
             raise OwnerProtocolError('owner_unrequested_original')
         return deepcopy(result)
@@ -251,11 +250,18 @@ class OwnerNativeClient:
         if page['complete_page'] is not True or not isinstance(page['items'], list) or len(page['items']) > limit:
             raise OwnerProtocolError('owner_complete_page_required')
         _id(page['next_cursor'])
-        if page['gaps'] != []:
-            raise OwnerProtocolError('owner_gap_contract_not_fixed')
+        if (
+            not isinstance(page['gaps'], list)
+            or len(page['gaps']) > 100
+            or any(
+                not isinstance(gap, str) or gap not in {'history_before_activation_unverified', 'original_unavailable'}
+                for gap in page['gaps']
+            )
+        ):
+            raise OwnerProtocolError('owner_gap_contract_invalid')
         previous_sequence, versions, event_ids = 0, set(), set()
         for item in page['items']:
-            fields = {
+            normal_fields = {
                 'event_id',
                 'change',
                 'native_version',
@@ -264,12 +270,27 @@ class OwnerNativeClient:
                 'qualification',
                 'dispatch_eligible',
             }
-            if not isinstance(item, dict) or set(item) != fields:
+            unresolved_fields = {'event_id', 'kind', 'source_sequence', 'event_cursor', 'reason', 'source', 'scope'}
+            if not isinstance(item, dict) or set(item) not in (normal_fields, unresolved_fields):
                 raise OwnerProtocolError('owner_item_schema_invalid')
+            unresolved = set(item) == unresolved_fields
             event_id = _id(item['event_id'])
             if event_id in event_ids:
                 raise OwnerProtocolError('owner_event_id_duplicate')
             event_ids.add(event_id)
+            if unresolved:
+                if (
+                    item['kind'] != 'unresolved'
+                    or item['reason'] != 'native_unresolved'
+                    or item['source'] != self.source
+                    or item['scope'] != self.scope
+                    or type(item['source_sequence']) is not int
+                    or not previous_sequence < item['source_sequence'] <= 9223372036854775807
+                ):
+                    raise OwnerProtocolError('owner_unresolved_invalid')
+                _id(item['event_cursor'])
+                previous_sequence = item['source_sequence']
+                continue
             _id(item['native_version'])
             _id(item['event_cursor'])
             _id(item['qualification'])
