@@ -39,11 +39,10 @@ class NativeHttpFixture:
 
 
 async def native_http_fixture(manager,*,binding,first_page=None,source_authority=None,
-                              owner_frame_sequences=False,flavor='personal-wechat-native-v1'):
+                              owner_frame_sequences=False,flavor='personal-wechat-native-v1',bot_uuid='bot-workspace-a'):
     """Use only in an isolated test. Caller may supply canonical synthetic pages."""
     await member(manager)
     workspace='workspace-a'
-    bot_uuid='bot-workspace-a'
     authority=source_authority or authority_expectation(binding)
     source_proof={'binding':authority['binding']} if authority['kind']=='wecom-source-binding-v1' else {
         'grant':dict(authority['grant'],active=True,read_only=True,workspace_allowed=True),
