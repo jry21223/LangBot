@@ -150,3 +150,8 @@ This is explicit Application wiring, not the complete application boot graph.
 Storage-image cleanup is a no-op; no plugin runtime, model, production profile
 or remote service is started. The raw upstream wx owner remains synthetic.
 Manager, runtime and placement checks themselves are not replaced with mocks.
+An additional enabled-WeCom case uses the default registry's real `HttpSource`,
+the Finance metadata/proof contract and the same real Manager/runtime/SQLite
+path to consume, stop and restart without duplicating the saved revision. Its
+loopback Finance HTTP owner is synthetic; this does not start Java, the archive
+SDK or a production collector, and `source_available` is not collector health.

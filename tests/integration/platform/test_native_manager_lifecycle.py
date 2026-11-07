@@ -30,6 +30,7 @@ from langbot.pkg.platform.native_ingress import _hash
 from langbot.pkg.platform.sources.agent_wechat import AgentWeChatAdapter
 from langbot.pkg.workspace.service import WorkspaceService
 from tests.integration.platform.test_native_ingress_contracts import context
+from tests.integration.platform.test_wecom_archive_ingress import archive_adapter
 from tests.integration.platform.wechat_owner_public_support import real_wechat_owner as _owner
 from tests.unit_tests.platform.test_agent_wechat_source import adapter_fixture
 
@@ -203,3 +204,82 @@ async def test_unregistered_enabled_native_does_not_abort_debug_runtime(manager,
         assert not ap.platform_mgr.websocket_proxy_bot.task_wrapper.task.done()
     finally:
         await stop(ap)
+
+
+@pytest.mark.asyncio
+async def test_enabled_wecom_default_factory_real_manager_consumption_and_shutdown(manager, tmp_path):
+    """The Finance HTTP owner is synthetic; neither Java nor its SDK is started."""
+    ap = await application(manager)
+    with archive_adapter() as (server, prototype):
+        config = dict(prototype.config, poll_interval=1)
+        binding = prototype.native_source_binding()
+        # An independently approved synthetic profile, not learned on first use.
+        approved = {
+            'source': 'fixture-wecom',
+            'scope': 'fixture-chat',
+            'principal': 'fixture-reader',
+            'workspace': 'workspace-a',
+            'revision': 'grant-v1',
+            'corp_id': 'fixture-corp',
+            'origin': 'owner_source_binding',
+        }
+        server.binding_proof = dict(approved)
+        await put_bot(manager, 'enabled-wecom', 'wecom-archive', config, True)
+        await register_native_access(
+            ap,
+            context(),
+            'enabled-wecom',
+            binding,
+            source_enabled=True,
+            source_authority={'kind': 'wecom-source-binding-v1', 'binding': approved},
+        )
+        secret = tmp_path / 'synthetic-wecom-metadata'
+        secret.write_text('fixture-reader-token-000000')
+        secret.chmod(0o600)
+        ap.native_source_client_factory = NativeClientRegistry(
+            ap,
+            [
+                dict(
+                    credential_ref=config['credential_ref'],
+                    workspace_uuid='workspace-a',
+                    bot_uuid='enabled-wecom',
+                    binding_sha256=_hash(asdict(binding)),
+                    enabled=True,
+                    provider='wecom-archive-v1',
+                    secret_file=secret.name,
+                    endpoint=f'http://127.0.0.1:{server.server_port}/saved',
+                )
+            ],
+            secret_root=str(tmp_path),
+        )
+        previous = None
+        for _ in range(2):
+            await ap.platform_mgr.initialize()
+            try:
+                assert len(ap.platform_mgr.bots) == 1
+                runtime = ap.platform_mgr.bots[0]
+                assert type(runtime) is RuntimeBot and runtime is not previous
+                assert runtime.native_ingress_store is not None
+                await runtime.assert_execution_active()
+                await ap.platform_mgr.run()
+                for attempt in range(100):
+                    try:
+                        records = await runtime.native_ingress_store.accepted_events(
+                            authorize=runtime.native_source_authorize
+                        )
+                    except ValueError:
+                        records = {'items': []}
+                    if records['items'] and runtime.adapter.native_runtime_state() == {'state': 'source_available'}:
+                        break
+                    await asyncio.sleep(0.02)
+                assert len(records['items']) == 1
+                assert records['items'][0]['envelope']['reference'] == 'wecom:message/fixture/wr-1'
+                assert records['items'][0]['envelope']['version'] == 'wr-1'
+                assert 'PRIVATE ORIGINAL' not in json.dumps(records)
+                assert await runtime.native_ingress_store.checkpoint() == 'cursor-one'
+                assert runtime.adapter.native_runtime_state() == {'state': 'source_available'}
+                assert runtime.adapter.get_supported_apis() == []
+                assert not runtime.task_wrapper.task.done()
+                previous = runtime
+            finally:
+                await stop(ap)
