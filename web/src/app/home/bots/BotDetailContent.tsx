@@ -39,6 +39,7 @@ import EntityBasicInfoDialog, {
   EntityBasicInfoValues,
 } from '@/app/home/components/entity-basic-info/EntityBasicInfoDialog';
 import AdapterEventDebugDialog from './components/bot-form/AdapterEventDebugDialog';
+import NativeIngressStatus from './components/native-ingress/NativeIngressStatus';
 import EntityTitleEditButton from '@/app/home/components/entity-basic-info/EntityTitleEditButton';
 
 export default function BotDetailContent({ id }: { id: string }) {
@@ -81,6 +82,17 @@ export default function BotDetailContent({ id }: { id: string }) {
       { replace: true },
     );
   const [adapterLabel, setAdapterLabel] = useState('');
+  const [isNativeIngress, setIsNativeIngress] = useState<boolean | null>(null);
+  const sourceKey = `${currentWorkspace?.workspace.uuid ?? ''}:${currentWorkspace?.membership.account_uuid ?? ''}:${currentWorkspace?.placement_generation ?? ''}:${id}`;
+  const sourceKeyRef = useRef(sourceKey);
+  sourceKeyRef.current = sourceKey;
+  const nativeRequestSequence = useRef(0);
+  const [nativeSnapshot, setNativeSnapshot] = useState<{
+    key: string;
+    value: unknown;
+  } | null>(null);
+  const nativeIngressRuntime =
+    nativeSnapshot?.key === sourceKey ? nativeSnapshot.value : undefined;
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [basicInfoOpen, setBasicInfoOpen] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -98,20 +110,82 @@ export default function BotDetailContent({ id }: { id: string }) {
   const [isTogglingEnable, setIsTogglingEnable] = useState(false);
   const [enableLoaded, setEnableLoaded] = useState(false);
 
-  // Fetch bot enable state
+  // Entity and status responses remain bound to their account/Workspace/Bot.
   useEffect(() => {
+    let active = true;
+    const requestSequence = ++nativeRequestSequence.current;
     if (!isCreateMode) {
       setLoadFailed(false);
+      setEnableLoaded(false);
       httpClient
         .getBot(id)
         .then((res) => {
+          if (!active || sourceKeyRef.current !== sourceKey) return;
           setBot(res.bot);
+          if (requestSequence === nativeRequestSequence.current) {
+            setNativeSnapshot({
+              key: sourceKey,
+              value: (
+                res.bot.adapter_runtime_values as
+                  | { native_ingress?: unknown }
+                  | undefined
+              )?.native_ingress,
+            });
+          }
           setBotEnabled(res.bot.enable ?? true);
           setEnableLoaded(true);
         })
-        .catch(() => setLoadFailed(true));
+        .catch(() => {
+          if (active) setLoadFailed(true);
+        });
     }
-  }, [id, isCreateMode, loadAttempt]);
+    return () => {
+      active = false;
+    };
+  }, [id, isCreateMode, loadAttempt, sourceKey]);
+
+  useEffect(() => {
+    if (isCreateMode || isNativeIngress !== true) return;
+    let active = true;
+    let pending = false;
+    const refresh = async () => {
+      if (pending) return;
+      pending = true;
+      const requestSequence = ++nativeRequestSequence.current;
+      try {
+        const response = await httpClient.getBot(id);
+        if (
+          active &&
+          sourceKeyRef.current === sourceKey &&
+          requestSequence === nativeRequestSequence.current
+        ) {
+          setNativeSnapshot({
+            key: sourceKey,
+            value: (
+              response.bot.adapter_runtime_values as
+                | { native_ingress?: unknown }
+                | undefined
+            )?.native_ingress,
+          });
+        }
+      } catch {
+        if (
+          active &&
+          sourceKeyRef.current === sourceKey &&
+          requestSequence === nativeRequestSequence.current
+        )
+          setNativeSnapshot({ key: sourceKey, value: undefined });
+      } finally {
+        pending = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 3000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [id, isCreateMode, isNativeIngress, sourceKey]);
 
   const handleEnableToggle = useCallback(
     async (checked: boolean) => {
@@ -205,11 +279,14 @@ export default function BotDetailContent({ id }: { id: string }) {
           <div className="mx-auto w-full min-w-0 max-w-7xl pb-8">
             <fieldset className="contents" disabled={!canManage}>
               <BotForm
+                key={sourceKey}
                 initBotId={undefined}
                 onFormSubmit={handleFormSubmit}
                 onNewBotCreated={handleNewBotCreated}
                 guideEnabled={canManage}
                 onAdapterLabelChange={setAdapterLabel}
+                onNativeIngressChange={setIsNativeIngress}
+                nativeIngressRuntime={nativeIngressRuntime}
               />
             </fieldset>
           </div>
@@ -284,7 +361,7 @@ export default function BotDetailContent({ id }: { id: string }) {
           </div>
           {canManage && (
             <div className="flex shrink-0 items-center gap-2">
-              {activeTab === 'config' && (
+              {activeTab === 'config' && isNativeIngress === false && (
                 <AdapterEventDebugDialog
                   key={id}
                   botId={id}
@@ -342,7 +419,7 @@ export default function BotDetailContent({ id }: { id: string }) {
                 </TabsTrigger>
               )}
             </TabsList>
-            {activeTab === 'sessions' && (
+            {activeTab === 'sessions' && isNativeIngress !== true && (
               <button
                 type="button"
                 aria-label={t('bots.sessionMonitor.refresh')}
@@ -377,12 +454,15 @@ export default function BotDetailContent({ id }: { id: string }) {
             <div className="min-h-0 min-w-0 pb-4 lg:h-full lg:pb-0">
               <fieldset className="contents" disabled={!canManage}>
                 <BotForm
+                  key={sourceKey}
                   ref={botFormRef}
                   initBotId={id}
                   onFormSubmit={handleFormSubmit}
                   onNewBotCreated={handleNewBotCreated}
                   onDirtyChange={setFormDirty}
                   onAdapterLabelChange={setAdapterLabel}
+                  onNativeIngressChange={setIsNativeIngress}
+                  nativeIngressRuntime={nativeIngressRuntime}
                   guideEnabled={canManage}
                 />
               </fieldset>
@@ -395,14 +475,32 @@ export default function BotDetailContent({ id }: { id: string }) {
               value="logs"
               className="flex-1 min-h-0 overflow-y-auto mt-4"
             >
-              <BotLogListComponent botId={id} />
+              {isNativeIngress && (
+                <div className="mb-4">
+                  <NativeIngressStatus
+                    value={nativeIngressRuntime}
+                    showRecords
+                  />
+                </div>
+              )}
+              <BotLogListComponent key={sourceKey} botId={id} />
             </TabsContent>
           )}
 
           {/* Tab: Sessions */}
           {canViewMonitoring && (
             <TabsContent value="sessions" className="flex-1 min-h-0 mt-4">
-              <BotSessionMonitor ref={sessionMonitorRef} botId={id} />
+              {isNativeIngress ? (
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                  {t('nativeIngress.sessions')}
+                </p>
+              ) : (
+                <BotSessionMonitor
+                  key={sourceKey}
+                  ref={sessionMonitorRef}
+                  botId={id}
+                />
+              )}
             </TabsContent>
           )}
         </Tabs>

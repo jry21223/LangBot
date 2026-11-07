@@ -1,5 +1,7 @@
+import { nativeIngressEn as nativeIngress } from './native-ingress';
 import pipelineMigration from './pipeline-migration/es-ES';
 const esES = {
+  nativeIngress,
   inflight: {
     autoCollapse: 'Plegar auto.',
     empty: 'No hay eventos en proceso',

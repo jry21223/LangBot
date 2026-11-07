@@ -1,5 +1,7 @@
+import { nativeIngressEn as nativeIngress } from './native-ingress';
 import pipelineMigration from './pipeline-migration/ru-RU';
 const ruRU = {
+  nativeIngress,
   inflight: {
     autoCollapse: 'Автосворачивание',
     empty: 'Нет событий в обработке',

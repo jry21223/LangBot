@@ -319,6 +319,7 @@ export interface Adapter {
   icon?: string;
   spec: {
     categories?: string[];
+    native_ingress?: boolean;
     legacy?: boolean;
     help_links?: Record<string, string>;
     supported_events?: string[];
