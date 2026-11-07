@@ -367,7 +367,33 @@ async def test_real_owner_proof_and_current_registration_both_gate_admission(man
             'corp_id': 'fixture-corp',
             'origin': 'owner_source_binding',
         }
+        # This is the independently approved profile, not copied from a poll
+        # response or from the adapter's configured account labels.
+        approved_profile = {
+            'kind': 'wecom-source-binding-v1',
+            'binding': {
+                'source': 'fixture-wecom',
+                'scope': 'fixture-chat',
+                'principal': 'fixture-reader',
+                'workspace': 'workspace-a',
+                'revision': 'grant-v1',
+                'corp_id': 'fixture-corp',
+                'origin': 'owner_source_binding',
+            },
+        }
         await register_native_access(ap, context(), 'bot-workspace-a', binding, source_enabled=True)
+        # Even a valid current owner proof cannot authorize its own audience.
+        with pytest.raises(PermissionError, match='native_source_audience_not_registered'):
+            await auth.source_factory(context(), 'bot-workspace-a', binding, adapter)
+        await register_native_access(
+            ap,
+            context(),
+            'bot-workspace-a',
+            binding,
+            source_enabled=True,
+            source_authority=approved_profile,
+            expected_revision=1,
+        )
         authorize = await auth.source_factory(context(), 'bot-workspace-a', binding, adapter)
         store = NativeIngressStore(
             manager,
@@ -387,7 +413,7 @@ async def test_real_owner_proof_and_current_registration_both_gate_admission(man
             await adapter.poll_once()
         server.binding_proof['corp_id'] = 'fixture-corp'
         await register_native_access(
-            ap, context(), 'bot-workspace-a', binding, source_enabled=False, expected_revision=1
+            ap, context(), 'bot-workspace-a', binding, source_enabled=False, expected_revision=2
         )
         with pytest.raises(PermissionError):
             await adapter.poll_once()
