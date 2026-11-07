@@ -618,6 +618,8 @@ class BotService:
         serialized = [self.ap.persistence_mgr.serialize_model(persistence_bot.Bot, bot, masked_columns) for bot in bots]
         for bot in serialized:
             bot['adapter'] = canonical_adapter_name(bot['adapter'])
+            if include_secret:
+                self._redact_invalid_native_configuration(bot)
         return serialized
 
     async def get_bot(self, context: TenantContext, bot_uuid: str, include_secret: bool = False) -> dict | None:
@@ -641,6 +643,8 @@ class BotService:
 
         serialized = self.ap.persistence_mgr.serialize_model(persistence_bot.Bot, bot, masked_columns)
         serialized['adapter'] = canonical_adapter_name(serialized['adapter'])
+        if include_secret:
+            self._redact_invalid_native_configuration(serialized)
         return serialized
 
     async def get_runtime_bot_info(
@@ -681,6 +685,37 @@ class BotService:
 
         return persistence_bot
 
+    def _validate_native_config_before_write(self,adapter_name,config):
+        adapter_name=canonical_adapter_name(adapter_name)
+        registry=getattr(getattr(self.ap,'platform_mgr',None),'adapter_dict',{})
+        if not isinstance(registry,dict):
+            registry={}
+        adapter_type=registry.get(adapter_name)
+        native=callable(getattr(adapter_type,'native_source_binding',None))
+        if not native:
+            if adapter_name in {'agent-wechat','wecom-archive'}:
+                raise ValueError('native_adapter_not_available')
+            return
+        validator=getattr(adapter_type,'native_validate_config',None)
+        if not callable(validator):
+            raise ValueError('native_config_validator_required')
+        # Pure validation happens before any INSERT/UPDATE, including disabled
+        # drafts. No source client, credential, runtime or network is resolved.
+        if not isinstance(config,dict):
+            raise ValueError('native_config_invalid')
+        validator(config)
+
+    def _redact_invalid_native_configuration(self,bot):
+        if bot.get('adapter') not in {'agent-wechat','wecom-archive'}:
+            return
+        try:
+            self._validate_native_config_before_write(bot['adapter'],bot.get('adapter_config'))
+        except ValueError:
+            # Never echo old out-of-schema credentials, even to resource.manage.
+            # This is read-only redaction, not an implicit database cleanup.
+            bot['adapter_config']={}
+            bot['native_configuration_invalid']=True
+
     async def create_bot(self, context: TenantContext, bot_data: dict) -> str:
         """Create bot"""
         workspace_uuid = require_workspace_uuid(context)
@@ -694,6 +729,7 @@ class BotService:
 
         # TODO: 检查配置信息格式
         bot_data = await self._prepare_bot_data(context, bot_data, include_uuid=True)
+        self._validate_native_config_before_write(bot_data.get('adapter',''),bot_data.get('adapter_config'))
         bot_data['uuid'] = str(uuid.uuid4())
         bot_data['workspace_uuid'] = workspace_uuid
         bot_data.setdefault('event_bindings', [])
@@ -716,6 +752,18 @@ class BotService:
         workspace_uuid = require_workspace_uuid(context)
         update_data = await self._prepare_bot_data(context, bot_data, include_uuid=False)
         update_data.pop('workspace_uuid', None)
+        existing=await self.get_bot(context,bot_uuid,include_secret=True)
+        if existing is None:
+            raise WorkspaceNotFoundError('Bot not found')
+        # Bot update fields merge with the persistent entity. adapter_config,
+        # when supplied, is an explicit complete replacement as in the existing
+        # API; silently merging old secret keys would make them unremovable.
+        target_adapter=update_data.get('adapter',existing.get('adapter',''))
+        target_config=update_data.get('adapter_config',existing.get('adapter_config'))
+        if canonical_adapter_name(target_adapter)!=canonical_adapter_name(existing.get('adapter','')):
+            if ('adapter_config' not in update_data and existing.get('adapter') in {'agent-wechat','wecom-archive'}):
+                raise ValueError('native_adapter_switch_requires_explicit_config')
+        self._validate_native_config_before_write(target_adapter,target_config)
 
         result = await self.ap.persistence_mgr.execute_async(
             scope_statement(
