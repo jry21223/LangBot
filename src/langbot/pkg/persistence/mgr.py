@@ -49,6 +49,7 @@ importutil.import_modules_in_pkg(persistence)
 
 
 _ALEMBIC_TENANT_TABLES = {
+    'native_ingress_access',
     'native_ingress_sources',
     'native_ingress_pages',
     'native_ingress_events',

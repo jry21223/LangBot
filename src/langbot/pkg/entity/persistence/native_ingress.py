@@ -28,6 +28,7 @@ class NativePage(Base):
     id = sa.Column(sa.String(64), primary_key=True)
     workspace_uuid = sa.Column(sa.String(36), nullable=False)
     source_id = sa.Column(sa.String(64), nullable=False)
+    receiver_id = sa.Column(sa.String(255), nullable=True)
     direction = sa.Column(sa.String(12), nullable=False, default="source")
     previous_cursor = sa.Column(sa.Text, nullable=True)
     fingerprint = sa.Column(sa.String(64), nullable=False)
@@ -71,3 +72,26 @@ class NativeSend(Base):
 
 
 NATIVE_TABLES = [NativeSource.__table__, NativePage.__table__, NativeEvent.__table__, NativeSend.__table__]
+
+
+class NativeAccess(Base):
+    """Operator-managed exact source audience and machine receiver registration."""
+    __tablename__ = 'native_ingress_access'
+    id = sa.Column(sa.String(64), primary_key=True)
+    workspace_uuid = sa.Column(sa.String(36), nullable=False)
+    bot_uuid = sa.Column(sa.String(255), nullable=False)
+    binding_sha256 = sa.Column(sa.String(64), nullable=False)
+    registered_by_account_uuid = sa.Column(sa.String(36), nullable=False)
+    source_enabled = sa.Column(sa.Boolean, nullable=False, default=False)
+    source_revision = sa.Column(sa.Integer, nullable=False, default=1)
+    receiver_id = sa.Column(sa.String(255), nullable=True)
+    receiver_api_key_uuid = sa.Column(sa.String(36), nullable=True)
+    receiver_enabled = sa.Column(sa.Boolean, nullable=False, default=False)
+    receiver_revision = sa.Column(sa.Integer, nullable=False, default=1)
+    __table_args__ = (
+        sa.UniqueConstraint('workspace_uuid','bot_uuid'),
+        sa.ForeignKeyConstraint(['workspace_uuid','bot_uuid'], ['bots.workspace_uuid','bots.uuid']),
+    )
+
+
+NATIVE_TABLES.append(NativeAccess.__table__)
