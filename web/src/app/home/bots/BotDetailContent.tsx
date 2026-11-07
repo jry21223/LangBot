@@ -40,6 +40,7 @@ import EntityBasicInfoDialog, {
 } from '@/app/home/components/entity-basic-info/EntityBasicInfoDialog';
 import AdapterEventDebugDialog from './components/bot-form/AdapterEventDebugDialog';
 import NativeIngressStatus from './components/native-ingress/NativeIngressStatus';
+import { hasNativeIngressCapability } from './components/native-ingress/native-ingress';
 import EntityTitleEditButton from '@/app/home/components/entity-basic-info/EntityTitleEditButton';
 
 export default function BotDetailContent({ id }: { id: string }) {
@@ -132,7 +133,7 @@ export default function BotDetailContent({ id }: { id: string }) {
           );
           setNativeCapability({
             key: sourceKey,
-            value: adapter ? adapter.spec.native_ingress === true : null,
+            value: adapter ? hasNativeIngressCapability(adapter) : null,
           });
           setLoadedSourceKey(sourceKey);
           if (requestSequence === nativeRequestSequence.current) {

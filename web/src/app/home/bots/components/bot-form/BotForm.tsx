@@ -38,6 +38,7 @@ import {
 import { cn } from '@/lib/utils';
 import EventBindingsEditor from './EventBindingsEditor';
 import NativeIngressStatus from '../native-ingress/NativeIngressStatus';
+import { hasNativeIngressCapability } from '../native-ingress/native-ingress';
 import EventRoutingHelp from './EventRoutingHelp';
 import LegacyAdapterHelp from './LegacyAdapterHelp';
 import PluginProcessorBindings from './PluginProcessorBindings';
@@ -206,7 +207,6 @@ interface BotFormProps {
   onNewBotCreated: (botId: string) => void;
   onDirtyChange?: (dirty: boolean) => void;
   onAdapterLabelChange?: (label: string) => void;
-  onNativeIngressChange?: (native: boolean) => void;
   nativeIngressRuntime?: unknown;
   guideEnabled?: boolean;
 }
@@ -218,7 +218,6 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
     onNewBotCreated,
     onDirtyChange,
     onAdapterLabelChange,
-    onNativeIngressChange,
     nativeIngressRuntime,
     guideEnabled = true,
   },
@@ -282,15 +281,6 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
   // Watch adapter and adapter_config for filtering
   const currentAdapter = form.watch('adapter');
   const isNativeIngress = adapterNativeIngress[currentAdapter] === true;
-  useEffect(() => {
-    if (Object.hasOwn(adapterNativeIngress, currentAdapter))
-      onNativeIngressChange?.(isNativeIngress);
-  }, [
-    currentAdapter,
-    adapterNativeIngress,
-    isNativeIngress,
-    onNativeIngressChange,
-  ]);
   const adapterLabel =
     adapterNameList.find((adapter) => adapter.value === currentAdapter)
       ?.label ?? '';
@@ -439,7 +429,7 @@ const BotForm = forwardRef<BotFormHandle, BotFormProps>(function BotForm(
       Object.fromEntries(
         adaptersRes.adapters.map((item) => [
           item.name,
-          item.spec.native_ingress === true,
+          hasNativeIngressCapability(item),
         ]),
       ),
     );
