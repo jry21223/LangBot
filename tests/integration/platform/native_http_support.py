@@ -84,7 +84,8 @@ async def native_http_fixture(manager,*,binding,first_page=None,source_authority
         authorization_fence=source_authorize.native_fence,owner_frame_sequences=owner_frame_sequences)
     initial=first_page.previous_cursor if first_page is not None else 'source-before'
     await store.initialize(initial)
-    if first_page is not None: await store.accept_page(first_page,authorize=source_authorize)
+    if first_page is not None:
+        await store.accept_page(first_page,authorize=source_authorize)
     async def active(): await execution(workspace)
     runtime=SimpleNamespace(native_ingress_store=store,native_source_authorize=source_authorize,
         assert_execution_active=active,workspace_uuid=workspace,bot_entity=SimpleNamespace(uuid=bot_uuid))

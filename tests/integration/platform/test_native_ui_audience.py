@@ -13,7 +13,10 @@ from langbot.pkg.platform.native_access import NativeAuthorization,register_nati
 from langbot.pkg.platform.native_ui import native_ui_status
 from langbot.pkg.platform.native_ingress import NativeIngressStore
 from langbot.pkg.platform.native_contract import SourcePage
-from tests.integration.platform.test_native_ingress_contracts import manager,store,context,router_event,authority_expectation  # noqa: F401
+from tests.integration.platform.test_native_ingress_contracts import store,context,router_event,authority_expectation  # noqa: F401
+
+
+pytest_plugins = ['tests.integration.platform.test_native_ingress_contracts']
 
 
 async def member(manager,account='operator'):
