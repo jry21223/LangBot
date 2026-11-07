@@ -92,3 +92,12 @@ Run candidate code only in the established disposable, no-secret test container;
 do not mount an authenticated home, Docker socket, source profiles or production
 state. The snapshot manifest records its revision and file hashes. Synthetic UI
 browser fixtures establish component behavior only, not a live source deployment.
+
+The Python 3.12 / pytest-asyncio 1.3 disposable test image uses
+`python -m tests.native_pytest_bootstrap -p no:cacheprovider ...`. This explicitly
+sets the fresh process's default event loop to None before pytest runner setup.
+A creation-stack diagnostic traced an otherwise unused implicit loop to
+pytest-asyncio's previous-loop probe; its later collection produced resource
+warnings during an unrelated migration test. This bootstrap prevents that
+allocation. It does not close provider-owned loops or suppress resource warnings,
+and leaves all test assertions and warning-as-error settings intact.
