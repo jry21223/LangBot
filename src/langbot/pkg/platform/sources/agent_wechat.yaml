@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: MessagePlatformAdapter
+metadata:
+  name: agent-wechat
+  label:
+    en_US: Personal WeChat
+    zh_Hans: 个人微信
+  description:
+    en_US: Native Agent WeChat input using an existing account and approved scope.
+    zh_Hans: 复用现有账号与获准范围的原生个人微信入口。
+spec:
+  legacy: true
+  config:
+    - name: endpoint
+      label:
+        en_US: Existing wx endpoint
+        zh_Hans: 现有 wx 地址
+      type: string
+      required: true
+      default: ""
+    - name: credential_ref
+      label:
+        en_US: Existing credential reference
+        zh_Hans: 现有凭据引用
+      type: string
+      required: true
+      default: ""
+    - name: account_id
+      label:
+        en_US: Existing account
+        zh_Hans: 现有账号
+      type: string
+      required: true
+      default: ""
+    - name: allowed_threads
+      label:
+        en_US: Approved conversation IDs
+        zh_Hans: 获准会话 ID
+      type: array[string]
+      required: true
+      default: []
+    - name: source_id
+      label:
+        en_US: Registered source
+        zh_Hans: 已登记来源
+      type: string
+      required: true
+      default: ""
+    - name: scope_id
+      label:
+        en_US: Registered scope
+        zh_Hans: 已登记范围
+      type: string
+      required: true
+      default: ""
+    - name: consumer_id
+      label:
+        en_US: Consumer ID
+        zh_Hans: 消费方 ID
+      type: string
+      required: true
+      default: ""
+    - name: initial_cursor
+      label:
+        en_US: Initial consumer cursor
+        zh_Hans: 初始消费位置
+      type: string
+      required: true
+      default: ""
+    - name: activation_at
+      label:
+        en_US: Activation timestamp
+        zh_Hans: 启用时间（含时区）
+      type: string
+      required: true
+      default: ""
+execution:
+  python:
+    path: ./agent_wechat.py
+    attr: AgentWeChatAdapter
