@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, ClassVar
 
 import pydantic
 from langbot_plugin.api.definition.abstract.platform.adapter import AbstractPlatformAdapter
@@ -15,6 +15,7 @@ from .projection import project_page
 
 
 class WecomArchiveAdapter(AbstractPlatformAdapter):
+    native_authority_kind: ClassVar[str] = 'workspace-grant'
     config: dict = pydantic.Field(exclude=True, repr=False)
     listeners: dict = pydantic.Field(default_factory=dict, exclude=True)
     _reader: HttpSource = pydantic.PrivateAttr()
