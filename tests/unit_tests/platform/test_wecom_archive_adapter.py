@@ -1,0 +1,88 @@
+"""Public receive-only adapter capabilities; no production source is contacted."""
+
+import json
+
+import pytest
+from langbot_plugin.api.definition.abstract.platform.event_logger import AbstractEventLogger
+from langbot_plugin.api.entities.builtin.platform.errors import NotSupportedError
+
+from langbot.pkg.platform.adapters.wecom_archive.adapter import WecomArchiveAdapter
+
+
+class FixtureLogger(AbstractEventLogger):
+    async def info(self, *args, **kwargs):
+        pass
+
+    async def debug(self, *args, **kwargs):
+        pass
+
+    async def warning(self, *args, **kwargs):
+        pass
+
+    async def error(self, *args, **kwargs):
+        pass
+
+
+def source_config():
+    return {
+        'source_endpoint': 'https://archive.example.invalid/source',
+        'source': 'fixture-wecom',
+        'account': 'fixture-corp',
+        'scope': 'fixture-chat',
+        'source_workspace': 'fixture-workspace',
+        'source_principal': 'fixture-reader',
+        'source_token': 'fixture-reader-token-000000',
+        'grant_revision': 'grant-v1',
+    }
+
+
+@pytest.mark.asyncio
+async def test_archive_source_has_no_send_reply_or_platform_api():
+    adapter = WecomArchiveAdapter(source_config(), FixtureLogger())
+    assert adapter.get_supported_apis() == []
+    with pytest.raises(NotSupportedError):
+        await adapter.send_message('group', 'fixture-chat', [])
+    with pytest.raises(NotSupportedError):
+        await adapter.reply_message(None, [])
+    with pytest.raises(NotSupportedError):
+        await adapter.call_platform_api('send_to_all', {})
+
+
+def test_native_manifest_uses_existing_component_loader_and_has_no_send_api():
+    from pathlib import Path
+    import yaml
+    from langbot.pkg.discover.engine import Component
+
+    path = Path('src/langbot/pkg/platform/adapters/wecom_archive/manifest.yaml')
+    manifest = yaml.safe_load(path.read_text())
+    component = Component(
+        owner='system', manifest=manifest, rel_path='pkg/platform/adapters/wecom_archive/manifest.yaml'
+    )
+    assert component.get_python_component_class() is WecomArchiveAdapter
+    assert manifest['spec']['common_apis'] == {'required': [], 'optional': []}
+    assert manifest['metadata']['name'] == 'wecom-archive'
+
+
+def test_adapter_representation_does_not_disclose_source_credentials():
+    adapter = WecomArchiveAdapter(source_config(), FixtureLogger())
+    assert source_config()['source_token'] not in repr(adapter)
+    assert source_config()['source_token'] not in json.dumps(adapter.model_dump())
+
+
+@pytest.mark.asyncio
+async def test_native_source_requires_host_authorizer_before_poll_or_start():
+    adapter = WecomArchiveAdapter(source_config(), FixtureLogger())
+    with pytest.raises(RuntimeError, match='native_source_authorizer_required'):
+        await adapter.poll_once()
+    with pytest.raises(RuntimeError, match='native_source_authorizer_required'):
+        await adapter.run_async()
+
+
+@pytest.mark.asyncio
+async def test_native_source_rejects_another_workspace_before_contacting_source():
+    from langbot.pkg.platform.adapters.wecom_archive.reader import SourceUnavailable
+
+    adapter = WecomArchiveAdapter(source_config(), FixtureLogger())
+    with pytest.raises(SourceUnavailable) as caught:
+        await adapter.authorize_native_source('another-workspace')
+    assert caught.value.status == 'permission_denied'
