@@ -39,8 +39,13 @@ class NativeHttpFixture:
 
 
 async def native_http_fixture(manager,*,binding,first_page=None,source_authority=None,
-                              owner_frame_sequences=False,flavor='personal-wechat-native-v1',bot_uuid='bot-workspace-a'):
-    """Use only in an isolated test. Caller may supply canonical synthetic pages."""
+                              owner_frame_sequences=False,flavor='personal-wechat-native-v1',bot_uuid='bot-workspace-a',
+                              runtime_factory=None):
+    """Isolated real HTTP/DB. An optional runtime factory supplies real Source IO.
+
+    Without that factory only source/placement are synthetic boundaries. With it,
+    the caller owns the real source adapter/registry/runtime and source ingestion.
+    """
     await member(manager)
     workspace='workspace-a'
     authority=source_authority or authority_expectation(binding)
@@ -78,17 +83,25 @@ async def native_http_fixture(manager,*,binding,first_page=None,source_authority
                                                                       'synthetic-other-workspace',scopes=[])
     await register_native_access(ap,admin,bot_uuid,binding,receiver_id='synthetic-host',
         receiver_api_key_uuid=keys['narrow']['uuid'],source_enabled=True,receiver_enabled=True,source_authority=authority)
-    source_authorize=await NativeAuthorization(ap).source_factory(admin,bot_uuid,binding,
-        SimpleNamespace(native_connection_facts=source_facts))
-    store=NativeIngressStore(manager,workspace_uuid=workspace,bot_uuid=bot_uuid,binding=binding,
-        authorization_fence=source_authorize.native_fence,owner_frame_sequences=owner_frame_sequences)
-    initial=first_page.previous_cursor if first_page is not None else 'source-before'
-    await store.initialize(initial)
-    if first_page is not None:
-        await store.accept_page(first_page,authorize=source_authorize)
-    async def active(): await execution(workspace)
-    runtime=SimpleNamespace(native_ingress_store=store,native_source_authorize=source_authorize,
-        assert_execution_active=active,workspace_uuid=workspace,bot_entity=SimpleNamespace(uuid=bot_uuid))
+    if runtime_factory is None:
+        source_authorize=await NativeAuthorization(ap).source_factory(admin,bot_uuid,binding,
+            SimpleNamespace(native_connection_facts=source_facts))
+        store=NativeIngressStore(manager,workspace_uuid=workspace,bot_uuid=bot_uuid,binding=binding,
+            authorization_fence=source_authorize.native_fence,owner_frame_sequences=owner_frame_sequences)
+        initial=first_page.previous_cursor if first_page is not None else 'source-before'
+        await store.initialize(initial)
+        if first_page is not None:
+            await store.accept_page(first_page,authorize=source_authorize)
+        async def active(): await execution(workspace)
+        runtime=SimpleNamespace(native_ingress_store=store,native_source_authorize=source_authorize,
+            assert_execution_active=active,workspace_uuid=workspace,bot_entity=SimpleNamespace(uuid=bot_uuid))
+    else:
+        if first_page is not None:
+            raise ValueError('real_source_runtime_owns_admission')
+        runtime=await runtime_factory(ap,admin,bot_uuid,binding)
+        store=runtime.native_ingress_store
+        if store.workspace_uuid!=workspace or store.bot_uuid!=bot_uuid or store.binding!=binding:
+            raise ValueError('source_runtime_fixture_binding_invalid')
     async def get_bot(ctx,requested):
         return runtime if ctx.workspace_uuid==workspace and requested==bot_uuid else None
     ap.platform_mgr=SimpleNamespace(get_bot_by_uuid=get_bot)
@@ -97,4 +110,6 @@ async def native_http_fixture(manager,*,binding,first_page=None,source_authority
     await group.initialize()
     domain=dict(endpoint='https://core-fixture.invalid',workspace=workspace,bot_uuid=bot_uuid,
                 source=binding.source,scope=binding.scope,flavor=flavor)
-    return NativeHttpFixture(ap,web,store,keys,domain,facts,hooks)
+    fixture=NativeHttpFixture(ap,web,store,keys,domain,facts,hooks)
+    fixture.runtime=runtime
+    return fixture
