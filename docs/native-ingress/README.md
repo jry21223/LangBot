@@ -119,3 +119,20 @@ Retain the actual original bytes and read-only mounts, and recheck them against
 the exact release candidate. Private approved hosts and origins stay in the
 private deployment manifest, never this repository. This compatibility result is
 not permission to change the live overlay or its access policy.
+
+The v3 public Source snapshot (`481338b44`) is also exercised by
+`test_native_wechat_vertical.py`: real scoped Source HTTP → default client
+registry and native runtime → real Core HTTP/API-key authentication/SQLite →
+formal `run_host.open_host` and its `NativeIngress`/native WeChat projector →
+Producer receipt and page ACK. The test keeps Core Workspace, source metadata
+audience and OpenAgents original-reader audience distinct. It includes a gateway
+failure replacing the ACK response only after the real receipt transaction
+commits, then restart reconciliation of that same receipt; source approval
+revocation blocks the next Host cycle before Core I/O.
+
+Raw wx owner and OA delivery-capability responses in this test are synthetic.
+Formal admission is preserved: this personal-source fixture has no approved GD
+admission and no enabled Understanding stage, so the candidate remains
+`needs_review`, the producer receipt is `accepted`, and the business outbox stays
+empty. It proves the ingress/receipt connection, not automatic analysis or an
+OpenAgents analysis result. No production source or user message is used.
