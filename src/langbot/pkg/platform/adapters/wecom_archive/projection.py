@@ -76,7 +76,12 @@ def _materialization(value):
 
 
 def _message(value):
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or set(value) - _MESSAGE_FIELDS - {
+        'content_materialization',
+        'media_evidence',
+        'content',
+        'raw_payload',
+    }:
         raise ValueError()
     result = {key: deepcopy(value[key]) for key in _MESSAGE_FIELDS if key in value}
     for key in ('message_id', 'chat_id', 'chat_type', 'sender_user_id', 'sender_identity_type', 'message_type'):
@@ -96,7 +101,11 @@ def _message(value):
         result['content_materialization'] = _materialization(value['content_materialization'])
     if 'media_evidence' in value:
         media = value['media_evidence']
-        if not isinstance(media, list) or len(media) > 100 or any(not isinstance(row, dict) for row in media):
+        if (
+            not isinstance(media, list)
+            or len(media) > 100
+            or any(not isinstance(row, dict) or set(row) - _MEDIA_FIELDS - {'sourcePath'} for row in media)
+        ):
             raise ValueError()
         narrowed = []
         for row in media:
@@ -144,6 +153,23 @@ def _attachments(value):
 
 
 def _envelope(item, binding):
+    fields = {
+        'source',
+        'scope',
+        'record',
+        'version',
+        'sequence',
+        'kind',
+        'business_at',
+        'observed_at',
+        'original',
+        'projection_hash',
+        'original_available',
+        'goal_reference',
+        'saved',
+    }
+    if not isinstance(item, dict) or set(item) != fields:
+        raise ValueError()
     if item['source'] != binding.source or item['scope'] != binding.scope or item['kind'] not in _KINDS:
         raise ValueError()
     record, version, original = _text(item['record']), _reference(item['version']), _reference(item['original'])
@@ -156,7 +182,11 @@ def _envelope(item, binding):
     if goal is not None and (not isinstance(goal, str) or not re.fullmatch(r'GD-[A-Za-z0-9-]{1,60}', goal)):
         raise ValueError()
     saved = item['saved']
-    if not isinstance(saved, dict) or type(saved.get('sequence')) is not int:
+    if (
+        not isinstance(saved, dict)
+        or set(saved) != {'version', 'sequence', 'observed_at', 'original', 'attachments', 'message'}
+        or type(saved.get('sequence')) is not int
+    ):
         raise ValueError()
     if any(saved[key] != item[key] for key in ('version', 'sequence', 'observed_at', 'original')):
         raise ValueError()

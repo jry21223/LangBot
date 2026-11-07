@@ -28,6 +28,7 @@ def archived_page(kind='created', available=True):
                 'original': 'wecom:message/fixture/wr-1',
                 'projection_hash': 'a' * 64,
                 'original_available': available,
+                'goal_reference': None,
                 'saved': {
                     'version': 'wr-1',
                     'sequence': 1,
@@ -198,3 +199,15 @@ def test_unsupported_owner_gap_is_rejected_instead_of_reported_as_complete():
     page['gaps'] = ['history_before_feed_unverified']
     with pytest.raises(SourceUnavailable):
         project_page(page, SourceBinding('fixture-wecom', 'fixture-corp', 'fixture-chat', 'grant-v1'))
+
+
+def test_unrecognized_change_metadata_is_rejected_before_projection():
+    import pytest
+    from langbot.pkg.platform.adapters.wecom_archive.reader import SourceUnavailable
+
+    binding = SourceBinding('fixture-wecom', 'fixture-corp', 'fixture-chat', 'grant-v1')
+    for key in ('note', 'summary', 'source_token'):
+        page = archived_page()
+        page['items'][0]['saved']['message'][key] = 'unapproved metadata'
+        with pytest.raises(SourceUnavailable):
+            project_page(page, binding)
