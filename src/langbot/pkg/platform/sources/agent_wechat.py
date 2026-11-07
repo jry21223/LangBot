@@ -153,13 +153,20 @@ class AgentWeChatAdapter(AbstractMessagePlatformAdapter):
             authorize=authorize_send,
         )
 
-    def register_listener(self, event_type, listener):
-        self.listeners[event_type] = listener
+    def register_listener(self, event_type, callback):
+        callbacks = self.listeners.setdefault(event_type, [])
+        if callback not in callbacks:
+            callbacks.append(callback)
 
-    def unregister_listener(self, event_type):
-        self.listeners.pop(event_type, None)
+    def unregister_listener(self, event_type, callback):
+        callbacks = self.listeners.get(event_type, [])
+        if callback in callbacks:
+            callbacks.remove(callback)
+        if not callbacks:
+            self.listeners.pop(event_type, None)
 
     async def _receive(self):
+        retryable = {'event_stream_disconnected', 'daemon_transport_unavailable', 'account_not_ready'}
         while True:
             try:
                 self.state, self.error_code = 'connecting', None
@@ -175,28 +182,33 @@ class AgentWeChatAdapter(AbstractMessagePlatformAdapter):
             except WxProtocolError as exc:
                 self.state, self.error_code = 'disconnected', str(exc)
                 await self.logger.warning('Agent WeChat: ' + str(exc))
-                if str(exc) in {
-                    'event_cursor_expired',
-                    'authorization_rejected',
-                    'trusted_source_binding_required',
-                    'recall_identity_unresolved',
-                    'media_identity_unresolved',
-                }:
-                    return
+                if str(exc) not in retryable:
+                    raise
             except Exception:
                 self.state, self.error_code = 'disconnected', 'source_unavailable'
                 await self.logger.warning('Agent WeChat: source_unavailable')
+                raise
             await asyncio.sleep(5)
 
     async def run_async(self):
         self._worker()
-        self.task = asyncio.create_task(self._receive())
+        if self.task is not None and not self.task.done():
+            raise WxProtocolError('source_already_running')
+        self.task = asyncio.current_task()
+        try:
+            await self._receive()
+        finally:
+            self.state = 'disconnected'
+            self.task = None
+            if self.client is not None:
+                await self.client.close()
 
     async def kill(self):
-        if self.task is not None:
-            self.task.cancel()
+        task = self.task
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
             try:
-                await self.task
+                await task
             except asyncio.CancelledError:
                 pass
         if self.client is not None:

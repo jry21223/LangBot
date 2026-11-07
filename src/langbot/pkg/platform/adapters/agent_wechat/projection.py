@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import re
 
 from langbot.pkg.platform.native_contract import SourceEnvelope
 
@@ -86,20 +87,35 @@ def project_message(
             raise ValueError('asset_binding_mismatch')
         asset_id = identity(asset.get('id'))
         kind = asset.get('kind')
-        if kind not in {'image', 'file', 'voice', 'video', 'sticker'}:
+        if not isinstance(kind, str) or kind not in {'image', 'file', 'voice', 'video', 'sticker'}:
             raise ValueError('invalid_media_kind')
         state = asset.get('state')
-        if not isinstance(state, str) or len(state) > 64:
+        if not isinstance(state, str) or state not in {
+            'pending',
+            'available',
+            'expired',
+            'unsupported',
+            'failed',
+            'cancelled',
+            'needs_review',
+        }:
             raise ValueError('invalid_media_state')
         content_hash = asset.get('sha256')
         byte_length = asset.get('byteLength')
-        if state == 'available' and (
-            not isinstance(content_hash, str)
-            or len(content_hash) != 64
-            or any(c not in '0123456789abcdef' for c in content_hash)
-            or type(byte_length) is not int
-            or byte_length < 0
+        content_type = asset.get('contentType')
+        if content_hash is not None and (
+            not isinstance(content_hash, str) or re.fullmatch('[0-9a-f]{64}', content_hash) is None
         ):
+            raise ValueError('invalid_media_hash')
+        if byte_length is not None and (type(byte_length) is not int or not 0 <= byte_length <= 9223372036854775807):
+            raise ValueError('invalid_media_length')
+        if content_type is not None and (
+            not isinstance(content_type, str)
+            or len(content_type) > 255
+            or re.fullmatch(r'[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+', content_type) is None
+        ):
+            raise ValueError('invalid_media_content_type')
+        if state == 'available' and (content_hash is None or byte_length is None or content_type is None):
             raise ValueError('available_media_integrity_required')
         projected_assets.append(
             {
@@ -108,12 +124,14 @@ def project_message(
                 'state': state,
                 'sha256': content_hash,
                 'byte_length': byte_length,
-                'content_type': asset.get('contentType'),
+                'content_type': content_type,
             }
         )
     projected_assets.sort(key=lambda item: item['asset_id'])
     recalled = message.get('recall') is not None
     msg_type = message.get('type')
+    if type(msg_type) is not int or not 0 <= msg_type <= 2147483647:
+        raise ValueError('invalid_message_type')
     body = message.get('body')
     is_text = msg_type == 1 and isinstance(body, str) and bool(body)
     is_media = msg_type in {3, 34, 43, 47, 49} and bool(projected_assets)

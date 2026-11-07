@@ -263,3 +263,34 @@ def test_saved_contract_is_validated_before_source_ack():
         bad['projection_hash'] = digest({key: value for key, value in bad.items() if key != 'projection_hash'})
         with pytest.raises(ValueError):
             validate_change(bad)
+
+
+def test_all_media_states_reject_nested_and_unbounded_metadata():
+    import pytest
+
+    asset = {'id': 'asset-1', 'accountId': 'account-1', 'messageId': 'msg-1', 'kind': 'image', 'state': 'pending'}
+    invalid = [
+        ('sha256', {'token': 'private'}),
+        ('sha256', ['private']),
+        ('byteLength', {'body': 'private'}),
+        ('byteLength', True),
+        ('byteLength', -1),
+        ('contentType', {'text': 'private'}),
+        ('contentType', ['image/png']),
+        ('contentType', 'a' * 1000),
+        ('state', 'invented'),
+        ('contentType', 'image/png\nsecret'),
+    ]
+    for key, value in invalid:
+        with pytest.raises(ValueError):
+            project_message(
+                message(type=3),
+                cursor='10',
+                origin='live',
+                account='account-1',
+                allowed_threads={'group-1'},
+                activation_at='2026-11-08T00:00:00Z',
+                source='fixture',
+                scope='scope',
+                assets=[dict(asset, **{key: value})],
+            )

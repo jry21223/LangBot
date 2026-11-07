@@ -220,3 +220,89 @@ async def test_connection_facts_never_invent_missing_account_or_online_state():
         client.status.return_value = state
         with pytest.raises(WxProtocolError):
             await connection_facts(client, 'account-1', 'fixture', 'scope')
+
+
+def adapter_fixture():
+    from langbot.pkg.platform.sources.agent_wechat import AgentWeChatAdapter
+    from langbot_plugin.api.definition.abstract.platform.event_logger import AbstractEventLogger
+
+    return AgentWeChatAdapter(
+        {
+            'account_id': 'account-1',
+            'allowed_threads': ['group-1'],
+            'source_id': 'fixture',
+            'scope_id': 'scope',
+            'credential_ref': 'existing',
+            'consumer_id': 'consumer',
+            'initial_cursor': '9',
+            'activation_at': '2026-11-08T00:00:00Z',
+        },
+        AsyncMock(spec=AbstractEventLogger),
+    )
+
+
+def test_sdk_two_argument_unregistration_removes_only_matching_callback():
+    import inspect
+    from langbot_plugin.api.definition.abstract.platform.adapter import AbstractMessagePlatformAdapter
+
+    adapter = adapter_fixture()
+    first, second = lambda *_: None, lambda *_: None
+    adapter.register_listener('event', first)
+    adapter.register_listener('event', second)
+    inspect.signature(AbstractMessagePlatformAdapter.unregister_listener).bind(adapter, 'event', first)
+    adapter.unregister_listener('event', first)
+    assert adapter.listeners['event'] == [second]
+    adapter.unregister_listener('event', first)
+    assert adapter.listeners['event'] == [second]
+    adapter.unregister_listener('event', second)
+    assert 'event' not in adapter.listeners
+
+
+@pytest.mark.asyncio
+async def test_run_stays_owned_by_calling_task_and_kill_joins_it():
+    import asyncio
+
+    adapter = adapter_fixture()
+    entered, stopped = asyncio.Event(), asyncio.Event()
+
+    class Worker:
+        async def initialize(self):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+    adapter.worker = Worker()
+    adapter.client = AsyncMock()
+    caller = asyncio.create_task(adapter.run_async())
+    await asyncio.wait_for(entered.wait(), 1)
+    assert not caller.done()
+    assert adapter.task is caller
+    await asyncio.wait_for(adapter.kill(), 1)
+    assert caller.done() and stopped.is_set()
+    adapter.client.close.assert_awaited()
+    assert adapter.state == 'disconnected'
+
+
+@pytest.mark.asyncio
+async def test_fatal_error_reaches_runtime_task_owner_and_closes_client():
+    adapter = adapter_fixture()
+    adapter.worker = AsyncMock()
+    adapter.worker.initialize.side_effect = WxProtocolError('event_cursor_expired')
+    adapter.client = AsyncMock()
+    with pytest.raises(WxProtocolError, match='event_cursor_expired'):
+        await adapter.run_async()
+    assert adapter.error_code == 'event_cursor_expired'
+    adapter.client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_source_revocation_is_not_swallowed_by_reconnect_loop():
+    adapter = adapter_fixture()
+    adapter.worker = AsyncMock()
+    adapter.worker.initialize.side_effect = PermissionError('source revoked')
+    adapter.client = AsyncMock()
+    with pytest.raises(PermissionError):
+        await adapter.run_async()
+    adapter.client.close.assert_awaited_once()
