@@ -86,7 +86,7 @@ def _message(value):
     result = {key: deepcopy(value[key]) for key in _MESSAGE_FIELDS if key in value}
     for key in ('message_id', 'chat_id', 'chat_type', 'sender_user_id', 'sender_identity_type', 'message_type'):
         _text(result[key])
-    if 'sender_access_type' in result:
+    if result.get('sender_access_type') is not None:
         _text(result['sender_access_type'])
     if type(result['source_seq']) is not int or result['source_seq'] < 0:
         raise ValueError()
@@ -97,6 +97,8 @@ def _message(value):
         _text(result['recalled_message_id'])
         if result['message_type'] != 'revoke':
             raise ValueError()
+    elif result['message_type'] == 'revoke':
+        raise ValueError()
     if 'content_materialization' in value:
         result['content_materialization'] = _materialization(value['content_materialization'])
     if 'media_evidence' in value:
