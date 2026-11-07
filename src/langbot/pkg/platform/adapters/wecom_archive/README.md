@@ -61,3 +61,24 @@ not claims made by the isolated fixtures.
 The targeted tests use a loopback synthetic owner and the real LangBot SQLite
 store inside the shared no-network, non-root, no-host-mount runner. They do not
 contact an existing account or read a real original.
+
+## Coverage and owner identity proof
+
+Until the shared feed supports typed source gaps, a page with any nonempty gap,
+missing gap list, or coverage other than `success`/`success_zero` is rejected.
+This deliberately stops intake instead of advancing a cursor while silently
+losing coverage evidence.
+
+The fresh `/source-binding` candidate contract has exactly `source`, `scope`,
+`principal`, `workspace`, `revision`, `corp_id`, and
+`origin=owner_source_binding`. Its source/audience/revision must match current
+protected authority reads before and after the proof. The account fact comes
+only from the owner-set `corp_id`; a configured account is never substituted.
+This proves an owner binding, not an SDK login. An owner without this endpoint
+fails closed. Endpoint presence and rollout remain unverified here.
+
+The source-specific `native_validate_change` hook validates exact narrowed
+metadata before durable acceptance. The initial narrow projection deliberately
+omits original bodies and owner filesystem paths. Its retained
+`projection_hash` remains owner provenance; this adapter does not claim to
+recompute the owner's projection hash over the new audience's narrowed shape.
