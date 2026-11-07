@@ -245,11 +245,23 @@ class WxNativeSource:
         return result
 
     async def native_original_manifest(self, reference, version):
+        original, envelope = await self._fresh(reference, version)
+        if original.get('type') != 1:
+            result = {
+                'reference': reference,
+                'version': version,
+                'kind': 'media',
+                'native_version': envelope.payload['native_version'],
+                'assets': envelope.payload['media'],
+            }
+            await self._fresh(reference, version)
+            return result
         result = await self.native_original(reference, version)
         data = result['text'].encode('utf-8')
         return {
             'reference': reference,
             'version': version,
+            'kind': 'text',
             'byte_length': len(data),
             'sha256': sha256(data).hexdigest(),
             'parts': len(self._parts(result['text'])),

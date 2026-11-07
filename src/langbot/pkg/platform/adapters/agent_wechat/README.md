@@ -23,7 +23,10 @@ Only metadata enters Core. Native references are
 `wechat-native:message/<record-sha256>/<version-sha256>`. Canonical JSON uses
 sorted keys, UTF-8, compact separators, no nonfinite numbers and no final newline.
 Original text/UTF-8 chunks are read fresh and checked before and after access.
-Media reads require the exact accepted asset plus current account/message,
+Media manifests return `kind=media`, the exact native version, and only the
+accepted asset ID/kind/state/SHA-256/byte length/MIME list. Text manifests use
+`kind=text` with the text SHA-256, byte length and ordered chunk count. Neither
+manifest exposes arbitrary source URLs or filenames. Media reads require the exact accepted asset plus current account/message,
 version, recall, SHA-256, byte length and MIME checks. No filename or XML is
 pretended to be extracted document text. Derived media parsing must use the
 existing parser owner and its approved runtime.

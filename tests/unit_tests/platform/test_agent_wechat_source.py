@@ -306,3 +306,43 @@ async def test_source_revocation_is_not_swallowed_by_reconnect_loop():
     with pytest.raises(PermissionError):
         await adapter.run_async()
     adapter.client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_media_manifest_exposes_only_exact_fresh_asset_metadata_for_existing_parser():
+    worker, client, store, _ = source()
+    client.message.return_value = message(type=3, body=None)
+    client.media.return_value = {
+        'items': [
+            {
+                'id': 'asset-1',
+                'accountId': 'account-1',
+                'messageId': 'msg-1',
+                'kind': 'image',
+                'state': 'available',
+                'sha256': 'a' * 64,
+                'byteLength': 4,
+                'contentType': 'image/png',
+                'contentUrl': 'https://not-returned.invalid',
+                'filename': 'not-returned',
+            }
+        ]
+    }
+    await worker.accept_event(event())
+    envelope = store.accept_page.call_args.args[0].events[0]
+    manifest = await worker.native_original_manifest(envelope.reference, envelope.version)
+    assert manifest['kind'] == 'media'
+    assert manifest['assets'] == [
+        {
+            'asset_id': 'asset-1',
+            'kind': 'image',
+            'state': 'available',
+            'sha256': 'a' * 64,
+            'byte_length': 4,
+            'content_type': 'image/png',
+        }
+    ]
+    assert 'filename' not in str(manifest) and 'not-returned' not in str(manifest)
+    client.message.return_value = message(type=3, body=None, recall={'observedAt': 'now'})
+    with pytest.raises(WxProtocolError):
+        await worker.native_original_manifest(envelope.reference, envelope.version)
