@@ -2,6 +2,7 @@ apiVersion: v1
 kind: MessagePlatformAdapter
 metadata:
   name: wecom-archive
+  icon: wecom.png
   label:
     en_US: WeCom Archive (Read Only)
     zh_Hans: 企业微信会话存档（只读）
