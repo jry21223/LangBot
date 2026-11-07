@@ -221,3 +221,16 @@ def test_known_owner_gaps_remain_independent_of_message_identity():
         assert projected.gaps == (code,)
         assert len(projected.events) == 1
         assert projected.events[0].record == 'message-one'
+
+
+def test_saved_owner_action_contract_accepts_absent_access_but_rejects_false_revoke():
+    import pytest
+    from langbot.pkg.platform.adapters.wecom_archive.reader import SourceUnavailable
+
+    binding = SourceBinding('fixture-wecom', 'fixture-corp', 'fixture-chat', 'grant-v1')
+    page = archived_page()
+    page['items'][0]['saved']['message']['sender_access_type'] = None
+    assert len(project_page(page, binding).events) == 1
+    page['items'][0]['saved']['message']['message_type'] = 'revoke'
+    with pytest.raises(SourceUnavailable):
+        project_page(page, binding)
