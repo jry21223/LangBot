@@ -39,6 +39,7 @@ test('missing or future status stays unknown and exposes no stale records', () =
   assert.deepEqual(parseNativeIngress(undefined), {
     state: 'unknown',
     records: [],
+    recordsAvailable: false,
     has_more: false,
   });
   assert.equal(
@@ -84,5 +85,19 @@ test('malformed counts, stages and unbounded records are not rendered', () => {
       records: Array(40).fill(synthetic.records[0]),
     }).records.length,
     25,
+  );
+});
+
+test('withheld metadata is distinct from an authorized empty records array', () => {
+  assert.equal(
+    parseNativeIngress({ state: 'needs_authorization', records: [] })
+      .recordsAvailable,
+    false,
+  );
+  assert.equal(parseNativeIngress({ state: 'error' }).recordsAvailable, false);
+  assert.equal(
+    parseNativeIngress({ state: 'source_available', records: [] })
+      .recordsAvailable,
+    true,
   );
 });

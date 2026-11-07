@@ -1,5 +1,6 @@
 // Synthetic API fixture only. This is UI verification, not a live source test.
 import { expect, test, type Page, type Route } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { installLangBotApiMocks } from '../../../../../../tests/e2e/fixtures/langbot-api';
 import manifestFixtures from './native-source-manifests.synthetic.json';
 const fixtureId = 'native-fixture';
@@ -62,6 +63,20 @@ function fixtureBot(runtime: unknown) {
 }
 async function setup(page: Page, language = 'en-US') {
   await installLangBotApiMocks(page, { authenticated: true, language });
+  for (const [name, file] of [
+    ['wecom-archive', 'wecom.png'],
+    ['agent-wechat', 'wechat.png'],
+  ]) {
+    await page.route(`**/api/v1/platform/adapters/${name}/icon`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'image/png',
+        body: readFileSync(
+          `src/app/home/bots/components/native-ingress/fixtures/${file}`,
+        ),
+      }),
+    );
+  }
   const runtime = {
     state: 'source_available',
     counts,
@@ -149,6 +164,7 @@ for (const width of [1440, 390]) {
     await expect(page.getByTestId('native-ingress-record')).toHaveCount(0);
     await expect(status).not.toContainText('fixture-v2');
     await expect(status).not.toContainText('Awaiting Router');
+    await expect(status).not.toContainText('No accepted records to display.');
     await page.screenshot({
       path: test.info().outputPath(`native-${width}-revoked.png`),
       fullPage: true,
@@ -283,10 +299,50 @@ test('both fixed native manifests are visible in the ordinary creation gallery',
   ).toBeVisible();
   const personal = gallery.getByRole('button', { name: /Personal WeChat/ });
   await expect(personal).toBeVisible();
+  for (const button of [
+    gallery.getByRole('button', { name: /WeCom Archive/ }),
+    personal,
+  ]) {
+    await expect
+      .poll(() =>
+        button
+          .locator('img')
+          .evaluate((image: HTMLImageElement) => image.naturalWidth),
+      )
+      .toBeGreaterThan(0);
+  }
   await personal.click();
   await expect(personal).toHaveAttribute('aria-pressed', 'true');
   await page.screenshot({
     path: test.info().outputPath('native-source-options.png'),
     fullPage: true,
   });
+});
+
+test('authorized empty records do not imply data when status later withholds metadata', async ({
+  page,
+}) => {
+  const runtime = await setup(page);
+  runtime.records = [];
+  runtime.counts = {
+    source_events: 0,
+    router_accepted: 0,
+    pending_host: 0,
+    quarantines: 0,
+    owner_gaps: 0,
+  };
+  await page.goto(`/home/bots?id=${fixtureId}&tab=logs`);
+  const status = page.getByTestId('native-ingress-status');
+  await expect(
+    status.getByText('No accepted records to display.'),
+  ).toBeVisible();
+  Object.assign(runtime, {
+    state: 'error',
+    records: undefined,
+    counts: undefined,
+  });
+  await expect(
+    status.getByText('Connection error', { exact: true }),
+  ).toBeVisible({ timeout: 10000 });
+  await expect(status).not.toContainText('No accepted records to display.');
 });

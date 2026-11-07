@@ -3,18 +3,19 @@
   "manifests": [
     {
       "name": "wecom-archive",
-      "sha256": "494e0d337e04e77e62651633097852cedf3ca096689dd2b9886447c56473b8c9",
-      "commit": "8cca49e6fb7f008c7f5bd10bff010f771c65a419"
+      "sha256": "81048e047cc6cac64563ddb1662b2e103bf72fb645da96e92cadcf5a259113f7",
+      "commit": "3b80a5016d635c11af3d779a5c4023af6cb20953"
     },
     {
       "name": "agent-wechat",
-      "sha256": "b2406f310cd9c382973eeea30aa4a0be7b1162fe0451ac0b3cb720ec5e203b40",
-      "commit": "1587c4d2b880488ed9980e9b81948d7ab14e6344"
+      "sha256": "8a13dda28fd3154f15fd97f616953933fe546204793f32deef45e8ab28a2c535",
+      "commit": "7af52c2e8bb6a67a5f91ca14c1029865109fa8a3"
     }
   ],
   "adapters": [
     {
       "name": "wecom-archive",
+      "icon": "wecom.png",
       "label": {
         "en_US": "WeCom Archive (Read Only)",
         "zh_Hans": "企业微信会话存档（只读）",
@@ -125,6 +126,7 @@
     },
     {
       "name": "agent-wechat",
+      "icon": "wechat.png",
       "label": {
         "en_US": "Personal WeChat",
         "zh_Hans": "个人微信"
