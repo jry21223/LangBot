@@ -136,3 +136,17 @@ admission and no enabled Understanding stage, so the candidate remains
 `needs_review`, the producer receipt is `accepted`, and the business outbox stays
 empty. It proves the ingress/receipt connection, not automatic analysis or an
 OpenAgents analysis result. No production source or user message is used.
+
+`test_native_manager_lifecycle.py` additionally starts the actual
+`PlatformManager`, `RuntimeBot`, task manager and database-backed
+`WorkspaceService`. It loads the real channel manifests, starts the existing
+debug WebSocket alongside disabled native drafts, and starts an enabled native
+channel through the default registry and frozen scoped Source HTTP. It waits
+for durable canonical-source acceptance, shuts down every managed task, then
+restarts against the same SQLite checkpoint. An enabled but unregistered source
+fails closed without preventing the debug runtime from starting.
+
+This is explicit Application wiring, not the complete application boot graph.
+Storage-image cleanup is a no-op; no plugin runtime, model, production profile
+or remote service is started. The raw upstream wx owner remains synthetic.
+Manager, runtime and placement checks themselves are not replaced with mocks.
