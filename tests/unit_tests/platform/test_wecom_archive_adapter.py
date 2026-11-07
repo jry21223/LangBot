@@ -57,8 +57,17 @@ def test_native_manifest_uses_existing_component_loader_and_has_no_send_api():
         owner='system', manifest=manifest, rel_path='pkg/platform/adapters/wecom_archive/manifest.yaml'
     )
     assert component.get_python_component_class() is WecomArchiveAdapter
-    assert manifest['spec']['common_apis'] == {'required': [], 'optional': []}
+    assert manifest['spec']['supported_apis'] == {'required': [], 'optional': []}
     assert manifest['metadata']['name'] == 'wecom-archive'
+    assert {row['name'] for row in manifest['spec']['config']} == {
+        'source',
+        'account',
+        'scope',
+        'grant_revision',
+        'credential_ref',
+        'poll_interval',
+        'page_limit',
+    }
 
 
 def test_adapter_representation_does_not_disclose_source_credentials():
@@ -84,3 +93,18 @@ async def test_native_source_requires_trusted_client_before_contacting_source():
     adapter = WecomArchiveAdapter(source_config(), FixtureLogger())
     with pytest.raises(RuntimeError, match='native_source_client_not_configured'):
         await adapter.authorize_native_source('another-workspace')
+
+
+def test_pure_pre_persistence_validation_rejects_service_fields_and_invalid_binding():
+    for field in ('source_token', 'endpoint', 'source_endpoint', 'secret_file', 'source_principal'):
+        with pytest.raises(ValueError):
+            WecomArchiveAdapter.native_validate_config(source_config() | {field: 'forbidden'})
+    for field, value in [
+        ('page_limit', True),
+        ('page_limit', 101),
+        ('poll_interval', 0),
+        ('account', ''),
+        ('credential_ref', '/arbitrary/path'),
+    ]:
+        with pytest.raises(ValueError):
+            WecomArchiveAdapter.native_validate_config(source_config() | {field: value})

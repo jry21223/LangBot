@@ -57,8 +57,10 @@ create or install a service-side credential registry entry. Its effective owner
 grant must be metadata-only; holding a broader token cannot be described as
 removing original-read access.
 
-The native manifest/configuration schema is pending explicit review and is not
-included in this candidate. Consequently backend discovery is not yet complete.
+The native reference-only manifest uses the existing component discovery and
+configuration form. It contains no endpoint, raw credential or secret path.
+Actual service registration, mounting, grants and audience approval remain
+separate activation gates.
 No source credential, grant, audience, real account, or production configuration
 is created by this code. Runtime host injection and the single Router handoff
 must be integrated and verified before enabling a source. Real text, image,
