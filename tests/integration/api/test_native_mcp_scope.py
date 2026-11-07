@@ -82,3 +82,12 @@ async def test_mcp_missing_authenticated_context_is_denied_before_tool_scope():
 def test_mcp_instance_allowlist_cannot_disable_protection_or_enable_remote_wildcards(configuration):
     ap=SimpleNamespace(instance_config=SimpleNamespace(data={'api':{'mcp_transport_security':configuration}}))
     with pytest.raises(ValueError): transport_security(ap)
+
+
+@pytest.mark.asyncio
+async def test_native_machine_handoff_is_not_exposed_as_user_mcp_tools():
+    server, _ = server_fixture()
+    names = {tool.name for tool in await server.mcp.list_tools()}
+    assert not names & {'read_native_router_page', 'ack_native_router_page', 'lookup_native_router_receipt'}
+    assert 'read_native_source_original' in names
+    assert 'get_system_info' in names

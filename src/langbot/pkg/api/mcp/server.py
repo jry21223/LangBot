@@ -97,28 +97,8 @@ class LangBotMCPServer:
         ap = self.ap
         mcp = self
 
-        # Native handoff tools require the same exact receiver registration as HTTP.
-        @mcp.tool(description='Read one frozen native ingress metadata page for the registered Router receiver; never dispatches a second pipeline.')
-        async def read_native_router_page(bot_uuid: str, cursor: str | None = None, limit: int = 100) -> str:
-            from ...platform.native_runtime import authorized_native_store
-            context = _authorized(Permission.RUNTIME_OPERATE)
-            store, authorize, _ = await authorized_native_store(ap, context, bot_uuid)
-            return _dump(await store.read_router_page(cursor, limit, authorize=authorize))
-
-        @mcp.tool(description='Acknowledge only receipts already committed by the registered unique Router Host.')
-        async def ack_native_router_page(bot_uuid: str, page_id: str, page_sha256: str, receipts: list[dict]) -> str:
-            from ...platform.native_runtime import authorized_native_store
-            context = _authorized(Permission.RUNTIME_OPERATE)
-            store, authorize, _ = await authorized_native_store(ap, context, bot_uuid)
-            return _dump(await store.ack_router_page(page_id, page_sha256, receipts, authorize=authorize))
-
-        @mcp.tool(description='Look up the exact durable Router producer receipt; null means pending or unknown, not failed.')
-        async def lookup_native_router_receipt(bot_uuid: str, event_id: str) -> str:
-            from ...platform.native_runtime import authorized_native_store
-            context = _authorized(Permission.RUNTIME_OPERATE)
-            store, authorize, _ = await authorized_native_store(ap, context, bot_uuid)
-            return _dump(await store.lookup_router_receipt(event_id, authorize=authorize))
-
+        # Durable Router handoff is an internal single-consumer machine protocol.
+        # It deliberately uses the dedicated HTTP receiver ACL, not user MCP tools.
         @mcp.tool(description='Read exact authorized native source authority/descriptor metadata; original text, chunks and media remain with the independent source reader.')
         async def read_native_source_original(bot_uuid: str, operation: str, reference: str, version: str, part_index: int | None = None) -> str:
             from ...platform.native_originals import read_native_original
