@@ -185,16 +185,38 @@ async def test_disconnected_owner_keeps_existing_checkpoint(manager):
 
 
 @pytest.mark.asyncio
-async def test_native_connection_facts_do_not_invent_account_proof():
-    with archive_adapter() as (_, adapter):
-        facts = await adapter.native_connection_facts()
-        assert facts == {
+async def test_native_connection_facts_require_owner_account_proof():
+    from langbot.pkg.platform.adapters.wecom_archive.reader import SourceUnavailable
+
+    with archive_adapter() as (server, adapter):
+        with pytest.raises(SourceUnavailable):
+            await adapter.native_connection_facts()
+        proof = {
             'source': 'fixture-wecom',
             'scope': 'fixture-chat',
-            'revision': 'grant-v1',
+            'principal': 'fixture-reader',
             'workspace': 'workspace-a',
+            'revision': 'grant-v1',
+            'corp_id': 'owner-attested-corp',
+            'origin': 'owner_source_binding',
         }
-        assert 'account' not in facts
+        server.binding_proof = proof
+        facts = await adapter.native_connection_facts()
+        assert facts['account'] == 'owner-attested-corp'
+        assert facts['account'] != adapter.config['account']
+        for field, value in [
+            ('workspace', 'another-workspace'),
+            ('revision', 'old-grant'),
+            ('origin', 'caller_config'),
+            ('corp_id', ''),
+        ]:
+            server.binding_proof = proof | {field: value}
+            with pytest.raises(SourceUnavailable):
+                await adapter.native_connection_facts()
+        server.binding_proof = proof
+        server.revoke_during_proof = True
+        with pytest.raises(SourceUnavailable):
+            await adapter.native_connection_facts()
 
 
 @pytest.mark.asyncio

@@ -58,14 +58,12 @@ class WecomArchiveAdapter(AbstractPlatformAdapter):
         validate_change(change, self.native_source_binding())
 
     async def native_connection_facts(self) -> dict:
-        """Read authority facts; an absent owner account proof stays absent."""
-        grant = await asyncio.to_thread(self._reader.authorize, self.config['source'], 'ingest')
-        facts = {key: grant[key] for key in ('source', 'scope', 'revision', 'workspace')}
-        # The frozen owner API does not attest account. The trusted Host must
-        # reject this absence until an explicit owner contract or mapping exists.
-        if isinstance(grant.get('account'), str) and grant['account']:
-            facts['account'] = grant['account']
-        return facts
+        """Use only the owner's fresh, protected source-binding proof."""
+        proof = await asyncio.to_thread(self._reader.read_source_binding)
+        return {key: proof[key] for key in ('source', 'scope', 'revision', 'workspace')} | {
+            'account': proof['corp_id'],
+            'origin': proof['origin'],
+        }
 
     async def authorize_native_source(self, workspace_uuid: str) -> None:
         if workspace_uuid != self.config['source_workspace']:
