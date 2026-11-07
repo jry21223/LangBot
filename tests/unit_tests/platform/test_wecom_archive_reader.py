@@ -33,6 +33,12 @@ class SavedSourceHandler(BaseHTTPRequestHandler):
             'read_only': True,
             'workspace_allowed': True,
         }
+        if urlsplit(self.path).path.endswith('/source-binding'):
+            proof = getattr(self.server, 'binding_proof', None)
+            if proof is not None:
+                body = dict(proof)
+            if getattr(self.server, 'revoke_during_proof', False):
+                self.server.changed = True
         if urlsplit(self.path).path.endswith('/changes'):
             body = {
                 'source': 'wecom-fixture',

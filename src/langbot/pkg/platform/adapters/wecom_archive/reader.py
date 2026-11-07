@@ -131,6 +131,23 @@ class HttpSource:
         grant = self._request('/authority', stage=stage, agent=agent, reference=event['evidence'])
         return self._checked_grant(grant, agent)
 
+    def read_source_binding(self):
+        """Fetch owner-attested metadata without borrowing a caller account label."""
+        with read_budget(self.timeout):
+            before = self.authorize(self.source, 'ingest')
+            proof = self._request('/source-binding')
+            expected = {'source', 'scope', 'principal', 'workspace', 'revision', 'corp_id', 'origin'}
+            if (
+                set(proof) != expected
+                or proof['origin'] != 'owner_source_binding'
+                or any(proof[key] != before[key] for key in ('source', 'scope', 'principal', 'workspace', 'revision'))
+                or not isinstance(proof['corp_id'], str)
+                or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', proof['corp_id'])
+                or self.authorize(self.source, 'ingest') != before
+            ):
+                raise SourceUnavailable('permission_denied')
+            return proof
+
     def read_changes(self, cursor=None, limit=100):
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError('invalid_page_limit')
