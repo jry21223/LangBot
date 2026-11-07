@@ -28,14 +28,27 @@ class WecomArchiveAdapter(AbstractPlatformAdapter):
 
     def __init__(self, config: dict, logger):
         super().__init__(config=dict(config), logger=logger, bot_account_id='')
+        self.native_validate_config(config)
+
+    @staticmethod
+    def native_validate_config(config: dict) -> None:
+        """A pure pre-persistence hook; no client or credentials are resolved."""
         allowed = {'source', 'account', 'scope', 'grant_revision', 'credential_ref', 'poll_interval', 'page_limit'}
-        if set(config) - allowed:
+        if not isinstance(config, dict) or set(config) - allowed:
             raise ValueError('archive_service_config_not_allowed')
-        self.native_credential_ref()
-        self.native_source_binding()
+        for field in ('source', 'account', 'scope', 'grant_revision'):
+            value = config.get(field)
+            if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_.:/-]{1,200}', value):
+                raise ValueError('archive_source_binding_invalid')
+        reference = config.get('credential_ref')
+        if not isinstance(reference, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', reference):
+            raise ValueError('native_credential_reference_invalid')
         interval = config.get('poll_interval', 5)
         if type(interval) not in (int, float) or not 1 <= interval <= 300:
             raise ValueError('archive_poll_interval_invalid')
+        limit = config.get('page_limit', 100)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError('archive_page_limit_invalid')
 
     def native_credential_ref(self) -> str:
         value = self.config.get('credential_ref')
