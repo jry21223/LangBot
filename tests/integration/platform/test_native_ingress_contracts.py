@@ -12,7 +12,7 @@ from langbot.pkg.entity.persistence.base import Base
 from langbot.pkg.entity.persistence.bot import Bot
 from langbot.pkg.entity.persistence.apikey import ApiKey
 from langbot.pkg.entity.persistence.user import User
-from langbot.pkg.entity.persistence.workspace import Workspace
+from langbot.pkg.entity.persistence.workspace import Workspace,WorkspaceMembership
 from langbot.pkg.entity.persistence.native_ingress import NATIVE_TABLES
 from langbot.pkg.persistence.databases.sqlite import SQLiteDatabaseManager
 from langbot.pkg.persistence.mgr import PersistenceManager
@@ -30,7 +30,7 @@ async def manager(tmp_path):
     manager.db = SQLiteDatabaseManager(ap)
     await manager.db.initialize()
     async with manager.get_db_engine().begin() as conn:
-        await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=[User.__table__, Workspace.__table__, Bot.__table__, ApiKey.__table__, *NATIVE_TABLES]))
+        await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=[User.__table__, Workspace.__table__, WorkspaceMembership.__table__, Bot.__table__, ApiKey.__table__, *NATIVE_TABLES]))
         for workspace in ['workspace-a', 'workspace-b']:
             await conn.execute(sa.insert(Workspace).values(uuid=workspace, instance_uuid='test-'+workspace, name=workspace, slug=workspace))
             await conn.execute(sa.insert(Bot).values(uuid='bot-'+workspace, workspace_uuid=workspace, name='test', description='', adapter='test', adapter_config={}, enable=False))
@@ -67,7 +67,7 @@ async def test_page_receipt_replays_after_restart_without_duplicate_events(manag
 
 def router_event(record='native-1', *, version='v1', kind='created', eligible=True):
     change = dict(source='test-source', scope='chat-a', record=record, version=version,
-                  sequence=1, kind=kind, business_at='2026-11-08T00:00:00Z',
+                  sequence=max(int(record.rsplit('-',1)[-1]) if record.rsplit('-',1)[-1].isdigit() else 1, int(version[1:]) if version[1:].isdigit() else 1), kind=kind, business_at='2026-11-08T00:00:00Z',
                   observed_at='2026-11-08T00:00:01Z', original='source:message/'+record+'/'+version,
                   projection_hash='a'*64, goal_reference=None, saved={})
     return SourceEnvelope(record, version, change['original'], kind,
@@ -183,7 +183,7 @@ async def test_invalid_page_rolls_back_events_and_cursor(manager):
     await ingress.accept_page(SourcePage('10','11',(event(),)),authorize=allowed)
     changed = router_event()
     changed.payload['origin'] = 'catchup'
-    with pytest.raises(ValueError, match='version_conflict'):
+    with pytest.raises(ValueError, match='version_conflict|sequence_conflict'):
         await ingress.accept_page(SourcePage('11','12',(event('native-2'),changed)),authorize=allowed)
     assert await ingress.checkpoint() == '11'
     assert len((await ingress.accepted_events(authorize=allowed))['items']) == 1
@@ -318,9 +318,11 @@ async def test_source_factory_and_transaction_fence_block_revoke_after_preflight
     from langbot.pkg.platform.native_access import NativeAuthorization, register_native_access
     ap = SimpleNamespace(persistence_mgr=manager)
     ingress = store(manager)
-    await register_native_access(ap,context(),'bot-workspace-a',ingress.binding,source_enabled=True)
+    expected=authority_expectation(ingress.binding)
+    await register_native_access(ap,context(),'bot-workspace-a',ingress.binding,source_enabled=True,source_authority=expected)
     async def facts():
-        return dict(source='test-source',account='account-a',scope='chat-a',revision='grant-v1')
+        return dict(source='test-source',account='account-a',scope='chat-a',revision='grant-v1',
+                    authority_proof={'binding':expected['binding']})
     authorize = await NativeAuthorization(ap).source_factory(context(),'bot-workspace-a',ingress.binding,
                                                             SimpleNamespace(native_connection_facts=facts,native_authority_kind="account-session"))
     await authorize()
@@ -493,9 +495,9 @@ async def test_registered_original_reader_checks_latest_revision_and_recall_befo
     await ingress.accept_page(SourcePage('10','11',(event(),)),authorize=allowed)
     class Adapter:
         calls=0
-        async def native_original(self,ref,version):
+        async def native_authority(self,ref,version):
             self.calls+=1
-            return dict(reference=ref,version=version,text='你好\nsource original')
+            return dict(reference=ref,version=version,available=True,recalled=False)
     adapter=Adapter()
     runtime=SimpleNamespace(native_ingress_store=ingress,adapter=adapter,workspace_uuid='workspace-a',
         bot_entity=SimpleNamespace(uuid='bot-workspace-a'),assert_execution_active=allowed,native_source_authorize=allowed)
@@ -505,12 +507,12 @@ async def test_registered_original_reader_checks_latest_revision_and_recall_befo
     await register_native_access(ap,context(),'bot-workspace-a',ingress.binding,
         receiver_id='unique-host',receiver_api_key_uuid='dedicated-key',source_enabled=True,receiver_enabled=True)
     receiver=context(principal_type='api_key',key='dedicated-key',permissions=[])
-    result=await read_native_original(ap,receiver,'bot-workspace-a','original','source:message/native-1/v1','v1')
-    assert result['text']=='你好\nsource original' and adapter.calls==1
+    result=await read_native_original(ap,receiver,'bot-workspace-a','authority','source:message/native-1/v1','v1')
+    assert result['original']['available'] is True and adapter.calls==1
     recalled=router_event(version='v2',kind='recalled',eligible=False)
     await ingress.accept_page(SourcePage('11','12',(recalled,)),authorize=allowed)
     with pytest.raises(PermissionError,match='changed_or_recalled'):
-        await read_native_original(ap,receiver,'bot-workspace-a','original','source:message/native-1/v1','v1')
+        await read_native_original(ap,receiver,'bot-workspace-a','authority','source:message/native-1/v1','v1')
     assert adapter.calls==1
 
 
@@ -521,7 +523,8 @@ async def test_client_reference_is_exact_and_never_allows_arbitrary_files_or_dis
     from langbot.pkg.platform.native_clients import NativeClientRegistry
     binding=store(manager).binding
     ap=SimpleNamespace(persistence_mgr=manager)
-    await register_native_access(ap,context(),'bot-workspace-a',binding,source_enabled=True)
+    await register_native_access(ap,context(),'bot-workspace-a',binding,source_enabled=True,
+                                 source_authority=authority_expectation(binding))
     secret=tmp_path/'wx-read'
     secret.write_text('synthetic-test-only-value')
     secret.chmod(0o400)
@@ -557,7 +560,8 @@ async def test_default_registry_does_not_move_account_wide_wx_credentials_into_l
     from langbot.pkg.platform.native_clients import NativeClientRegistry
     binding=store(manager).binding
     ap=SimpleNamespace(persistence_mgr=manager)
-    await register_native_access(ap,context(),'bot-workspace-a',binding,source_enabled=True)
+    await register_native_access(ap,context(),'bot-workspace-a',binding,source_enabled=True,
+                                 source_authority=authority_expectation(binding))
     entry=dict(credential_ref='unscoped-wx',enabled=True,workspace_uuid='workspace-a',bot_uuid='bot-workspace-a',
                binding_sha256=store(manager).binding_hash,provider='agent-wechat-v1',
                endpoint='https://fixture.invalid/v1',secret_file='does-not-exist')
@@ -626,10 +630,134 @@ async def test_migration_rejects_same_columns_without_required_constraints(tmp_p
             await conn.run_sync(lambda c: Base.metadata.create_all(c,tables=[User.__table__,Workspace.__table__,Bot.__table__]))
             await conn.exec_driver_sql('''CREATE TABLE native_ingress_sources (
                 id VARCHAR(64) PRIMARY KEY NOT NULL,workspace_uuid VARCHAR(36) NOT NULL,bot_uuid VARCHAR(255) NOT NULL,
-                binding JSON NOT NULL,binding_sha256 VARCHAR(64) NOT NULL,cursor TEXT,
+                binding JSON NOT NULL,binding_sha256 VARCHAR(64) NOT NULL,cursor TEXT,owner_frame_sequences BOOLEAN NOT NULL DEFAULT 0,last_source_sequence BIGINT,
                 position INTEGER NOT NULL DEFAULT 0,router_cursor INTEGER NOT NULL DEFAULT 0,router_pending_page VARCHAR(64))''')
         await run_alembic_stamp(engine,'0037_metadata_text')
         with pytest.raises(RuntimeError,match='exact type, nullability'):
             await run_alembic_upgrade(engine)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_rejects_unapproved_cascade_on_otherwise_matching_native_source(tmp_path):
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from langbot.pkg.persistence.alembic_runner import run_alembic_stamp,run_alembic_upgrade
+    engine=create_async_engine('sqlite+aiosqlite:///'+str(tmp_path/'cascade.db'))
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda c: Base.metadata.create_all(c,tables=[User.__table__,Workspace.__table__,Bot.__table__]))
+            await conn.exec_driver_sql('''CREATE TABLE native_ingress_sources (
+                id VARCHAR(64) PRIMARY KEY NOT NULL,workspace_uuid VARCHAR(36) NOT NULL,bot_uuid VARCHAR(255) NOT NULL,
+                binding JSON NOT NULL,binding_sha256 VARCHAR(64) NOT NULL,cursor TEXT,owner_frame_sequences BOOLEAN NOT NULL DEFAULT 0,last_source_sequence BIGINT,
+                position INTEGER NOT NULL DEFAULT 0,router_cursor INTEGER NOT NULL DEFAULT 0,router_pending_page VARCHAR(64),
+                UNIQUE(workspace_uuid,id),UNIQUE(workspace_uuid,bot_uuid),
+                FOREIGN KEY(workspace_uuid) REFERENCES workspaces(uuid) ON DELETE CASCADE,
+                FOREIGN KEY(workspace_uuid,bot_uuid) REFERENCES bots(workspace_uuid,uuid))''')
+        await run_alembic_stamp(engine,'0037_metadata_text')
+        with pytest.raises(RuntimeError,match='exact type, nullability'):
+            await run_alembic_upgrade(engine)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_typed_owner_unresolved_preserves_event_sequence_without_fake_message_reference(manager):
+    from langbot.pkg.platform.native_contract import SourceUnresolved
+    from langbot.pkg.entity.persistence.native_ingress import NativeGap
+    ingress=NativeIngressStore(manager,workspace_uuid='workspace-a',bot_uuid='bot-workspace-a',
+                               binding=store(manager).binding,owner_frame_sequences=True)
+    await ingress.initialize('owner-before')
+    unresolved=SourceUnresolved('owner-event-9',9,'wx-raw-3','test-source','chat-a')
+    await ingress.accept_page(SourcePage('owner-before','owner-after',(),unresolved=(unresolved,)),authorize=allowed)
+    assert await ingress.source_sequence_checkpoint()==9
+    page=await ingress.read_router_page(None,authorize=allowed)
+    assert page['items']==[] and page['gaps']==[dict(event_id=_hash([ingress.source_id,'native-unresolved','owner-event-9']),
+        reason='native_unresolved',source='test-source',scope='chat-a')]
+    await ingress.ack_router_page(page['page_id'],page['page_sha256'],[],authorize=allowed)
+    restarted=NativeIngressStore(manager,workspace_uuid='workspace-a',bot_uuid='bot-workspace-a',
+                               binding=store(manager).binding,owner_frame_sequences=True)
+    assert await restarted.checkpoint()=='owner-after'
+    assert await restarted.source_sequence_checkpoint()==9
+    async with manager.tenant_uow('workspace-a') as uow:
+        row=(await uow.session.execute(sa.select(NativeGap))).scalar_one()
+        assert row.owner_event_id=='owner-event-9' and row.source_sequence==9 and row.upstream_cursor=='wx-raw-3'
+        assert not hasattr(row,'record') and not hasattr(row,'reference')
+
+
+def owner_store(manager):
+    return NativeIngressStore(manager,workspace_uuid='workspace-a',bot_uuid='bot-workspace-a',
+                              binding=store(manager).binding,owner_frame_sequences=True)
+
+
+def owner_event(record,sequence,owner_eid):
+    from dataclasses import replace
+    value=router_event(record)
+    value.payload['owner_event_id']=owner_eid
+    value.payload['change']['sequence']=sequence
+    return replace(value,owner_frame_sequence=sequence)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('second_kind',['normal','unresolved'])
+async def test_owner_frame_sequence_is_unique_across_pages_restart_and_frame_types(manager,second_kind):
+    from langbot.pkg.platform.native_contract import SourceUnresolved
+    ingress=owner_store(manager)
+    await ingress.initialize('10')
+    first=owner_event('native-1',9,'owner-a')
+    await ingress.accept_page(SourcePage('10','11',(first,)),authorize=allowed)
+    restarted=owner_store(manager)
+    if second_kind=='normal':
+        page=SourcePage('11','12',(owner_event('native-2',9,'owner-b'),))
+    else:
+        page=SourcePage('11','12',(),unresolved=(SourceUnresolved('owner-b',9,'raw-2','test-source','chat-a'),))
+    with pytest.raises(ValueError,match='sequence_conflict'):
+        await restarted.accept_page(page,authorize=allowed)
+    assert await restarted.checkpoint()=='11'
+    assert await restarted.source_sequence_checkpoint()==9
+    assert len((await restarted.accepted_events(authorize=allowed))['items'])==1
+
+
+@pytest.mark.asyncio
+async def test_finance_record_sequence_is_not_reinterpreted_as_global_owner_frame_sequence(manager):
+    from langbot.pkg.entity.persistence.native_ingress import NativeFrame
+    ingress=store(manager)
+    await ingress.initialize('10')
+    one=router_event('finance-one')
+    two=router_event('finance-two')
+    assert one.payload['change']['sequence']==two.payload['change']['sequence']==1
+    await ingress.accept_page(SourcePage('10','11',(one,two)),authorize=allowed)
+    assert len((await ingress.accepted_events(authorize=allowed))['items'])==2
+    assert await ingress.source_sequence_checkpoint() is None
+    async with manager.tenant_uow('workspace-a') as uow:
+        assert (await uow.session.execute(sa.select(sa.func.count()).select_from(NativeFrame))).scalar()==0
+
+
+@pytest.mark.asyncio
+async def test_exact_owner_frame_replay_is_idempotent_but_eid_cannot_change_sequence(manager):
+    ingress=owner_store(manager)
+    await ingress.initialize('10')
+    frame=owner_event('native-1',9,'owner-a')
+    page=SourcePage('10','11',(frame,))
+    receipt=await ingress.accept_page(page,authorize=allowed)
+    assert await owner_store(manager).accept_page(page,authorize=allowed)==receipt
+    with pytest.raises(ValueError,match='identity_conflict'):
+        await ingress.accept_page(SourcePage('11','12',(owner_event('native-2',10,'owner-a'),)),authorize=allowed)
+    assert await ingress.checkpoint()=='11'
+
+
+@pytest.mark.asyncio
+async def test_generic_source_cannot_claim_owner_event_id_without_explicit_owner_domain(manager):
+    ingress=store(manager)
+    await ingress.initialize('10')
+    value=router_event()
+    value.payload['owner_event_id']='owner-eid-without-sequence'
+    with pytest.raises(ValueError,match='owner_sequence_domain_required'):
+        await ingress.accept_page(SourcePage('10','11',(value,)),authorize=allowed)
+    assert await ingress.checkpoint()=='10'
+
+
+def authority_expectation(binding):
+    return dict(kind='wecom-source-binding-v1',binding=dict(source=binding.source,scope=binding.scope,
+        principal='source-metadata-reader',workspace='approved-source-profile',revision=binding.revision,
+        corp_id=binding.account,origin='owner_source_binding'))

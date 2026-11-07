@@ -12,7 +12,7 @@ from .....platform.native_runtime import authorized_native_store
 class NativeIngressRouterGroup(group.RouterGroup):
     async def initialize(self):
         @self.route('/<bot_uuid>/router/changes', methods=['GET'],
-                    auth_type=group.AuthType.API_KEY, permission=Permission.RUNTIME_OPERATE)
+                    auth_type=group.AuthType.API_KEY)
         async def changes(bot_uuid, request_context):
             store, authorize, _ = await authorized_native_store(self.ap, request_context, bot_uuid)
             try:
@@ -23,7 +23,7 @@ class NativeIngressRouterGroup(group.RouterGroup):
             return self.success(data=page)
 
         @self.route('/<bot_uuid>/router/ack', methods=['POST'],
-                    auth_type=group.AuthType.API_KEY, permission=Permission.RUNTIME_OPERATE)
+                    auth_type=group.AuthType.API_KEY)
         async def ack(bot_uuid, request_context):
             store, authorize, _ = await authorized_native_store(self.ap, request_context, bot_uuid)
             body = await quart.request.get_json()
@@ -36,7 +36,7 @@ class NativeIngressRouterGroup(group.RouterGroup):
             return self.success(data=result)
 
         @self.route('/<bot_uuid>/router/receipts/<event_id>', methods=['GET'],
-                    auth_type=group.AuthType.API_KEY, permission=Permission.RUNTIME_OPERATE)
+                    auth_type=group.AuthType.API_KEY)
         async def lookup(bot_uuid, event_id, request_context):
             store, authorize, _ = await authorized_native_store(self.ap, request_context, bot_uuid)
             return self.success(data=await store.lookup_router_receipt(event_id, authorize=authorize))
@@ -48,7 +48,7 @@ class NativeIngressRouterGroup(group.RouterGroup):
             # The service additionally requires ACCOUNT and resource.manage;
             # support/global keys cannot register source audiences.
             body = await quart.request.get_json()
-            allowed = {'receiver_id','receiver_api_key_uuid','source_enabled','receiver_enabled','expected_revision'}
+            allowed = {'receiver_id','receiver_api_key_uuid','source_enabled','receiver_enabled','expected_revision','source_authority','ui_observer_accounts'}
             if not isinstance(body,dict) or not set(body) <= allowed:
                 return self.http_status(400,'native_registration_invalid',message('registration_invalid'))
             result = await register_native_access(self.ap,request_context,bot_uuid,

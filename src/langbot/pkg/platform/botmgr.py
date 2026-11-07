@@ -2468,16 +2468,24 @@ class PlatformManager:
                     await bot.shutdown()
                 self._pop_runtime_bot(key)
 
+    def _adapter_info(self,component):
+        info=component.to_plain_dict()
+        adapter_type=self.adapter_dict.get(component.metadata.name)
+        if callable(getattr(adapter_type,'native_source_binding',None)):
+            info.setdefault('spec',{})['native_ingress']=True
+            info['spec']['native_capabilities']={'ingress_only':True,'can_send':False,'existing_router':True}
+        return info
+
     def get_available_adapters_info(self) -> list[dict]:
         return [
-            component.to_plain_dict() for component in self.adapter_components if component.metadata.name != 'websocket'
+            self._adapter_info(component) for component in self.adapter_components if component.metadata.name != 'websocket'
         ]
 
     def get_available_adapter_info_by_name(self, name: str) -> dict | None:
         name = canonical_adapter_name(name)
         for component in self.adapter_components:
             if component.metadata.name == name:
-                return component.to_plain_dict()
+                return self._adapter_info(component)
         return None
 
     def get_available_adapter_manifest_by_name(self, name: str) -> engine.Component | None:

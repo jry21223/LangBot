@@ -78,16 +78,21 @@ async def attach_native_runtime(runtime):
 
     async def authorize():
         await runtime.assert_execution_active()
-        await authorize_source()
+        facts=await authorize_source()
+        runtime.native_source_facts=facts
 
     await authorize()
     validator = getattr(runtime.adapter,'native_validate_change',None)
     if not callable(validator):
         raise NativeAccessDenied('native_source_validator_required')
+    owner_sequences=getattr(runtime.adapter,'native_owner_frame_sequences',False)
+    if callable(owner_sequences):
+        owner_sequences=owner_sequences()
     store = NativeIngressStore(runtime.ap.persistence_mgr, workspace_uuid=runtime.workspace_uuid,
                                bot_uuid=runtime.bot_entity.uuid, binding=binding,
                                authorization_fence=getattr(authorize_source,"native_fence",None), change_validator=validator,
-                               owner_gap_codes=getattr(runtime.adapter,"native_owner_gap_codes",frozenset()))
+                               owner_gap_codes=getattr(runtime.adapter,"native_owner_gap_codes",frozenset()),
+                               owner_frame_sequences=owner_sequences)
     # initialize is adapter-owned because its initial source cursor must be
     # explicit, persisted, and included in the immutable configuration revision.
     runtime.adapter.attach_native_ingress(store, authorize)
@@ -121,5 +126,6 @@ async def authorized_native_store(ap, request_context, bot_uuid):
     await authorize()
     receiver_store = NativeIngressStore(ap.persistence_mgr,workspace_uuid=runtime.workspace_uuid,
         bot_uuid=runtime.bot_entity.uuid,binding=runtime.native_ingress_store.binding,
-        authorization_fence=getattr(authorize_receiver,"native_fence",None))
+        authorization_fence=getattr(authorize_receiver,"native_fence",None),
+        owner_frame_sequences=runtime.native_ingress_store.owner_frame_sequences)
     return receiver_store, authorize, runtime

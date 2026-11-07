@@ -13,6 +13,8 @@ from .native_runtime import authorized_native_store
 async def read_native_original(ap,context,bot_uuid,kind,reference,version,*,part_index=None,asset_id=None):
     if kind not in {'authority','original','manifest','chunk','media'}:
         raise ValueError('native_original_operation_invalid')
+    if kind in {'original','chunk','media'}:
+        raise NativeAccessDenied('native_metadata_reader_originals_forbidden')
     store,authorize,runtime=await authorized_native_store(ap,context,bot_uuid)
     await store.require_current_original(reference,version,authorize=authorize)
     names={'authority':'native_authority','original':'native_original',

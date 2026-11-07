@@ -29,6 +29,17 @@ class SourceEnvelope:
     reference: str
     kind: str
     payload: dict[str, Any]
+    owner_frame_sequence: int | None = None
+
+
+@dataclass(frozen=True)
+class SourceUnresolved:
+    event_id: str
+    source_sequence: int
+    event_cursor: str
+    source: str
+    scope: str
+    reason: str = 'native_unresolved'
 
 
 @dataclass(frozen=True)
@@ -38,6 +49,7 @@ class SourcePage:
     events: tuple[SourceEnvelope, ...]
     complete: bool = True
     gaps: tuple[str, ...] = ()
+    unresolved: tuple[SourceUnresolved, ...] = ()
 
 
 @dataclass(frozen=True)

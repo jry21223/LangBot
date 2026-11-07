@@ -26,7 +26,7 @@ class _PersistenceManager:
             self.update_values = {
                 key: value
                 for key, value in statement.compile().params.items()
-                if not key.startswith(('uuid_', 'workspace_uuid_'))
+                if not key.startswith(('uuid_', 'workspace_uuid_', 'adapter_'))
             }
             return None
 

@@ -229,24 +229,23 @@ Use `reset_session_context(bot_id, session_id)` only when a user asks to start a
 
 ## Native source handoff
 
-`read_native_router_page`, `ack_native_router_page`, and
-`lookup_native_router_receipt` mirror `/api/v1/native-ingress/<bot_uuid>/router/`.
-They require normal Workspace authorization **and** a specifically registered
-receiver principal for that source/bot/revision. A resource administrator is not
-implicitly a Router receiver. Missing registration is denied by default.
+Router page consumption, acknowledgement, and receipt lookup use only the
+internal `/api/v1/native-ingress/<bot_uuid>/router/` HTTP protocol. They are not
+agent-accessible operations and are not exposed as MCP tools. This preserves one
+registered machine consumer instead of adding another user-facing dispatch path.
+Existing agent-accessible HTTP capabilities keep their ordinary MCP parity.
 
-The single existing Router Host persists its candidate and coverage transaction
-before acknowledging a frozen page. Compare each returned durable receipt before
-clearing the Host's pending acknowledgement. A null lookup is pending/unknown;
-never invent acceptance or resend business actions. These are source producer
-receipts, not execution or delivery success. Do not enable a second consumer or
-forward source content through the ordinary LangBot pipeline in parallel.
+The existing Host commits candidates and coverage before acknowledgement;
+producer acceptance is not business execution success. Do not start a second
+consumer or route native ingress through the ordinary model pipeline.
 
 `read_native_source_original` delegates exact accepted source references to the
-current native adapter for authority, text originals, UTF-8 manifests and chunks.
+current native adapter for authority and descriptor metadata. Text originals,
+chunks and media are denied here and remain with the independently authorized
+OpenAgents source reader.
 Every read rechecks receiver registration, source authority, the latest durable
 record version and native recall state. It cannot read an arbitrary URL or
-unknown asset. Native media bytes use the protected HTTP source/media endpoint;
+unknown asset. Native media bytes are not exposed to the LangBot metadata receiver.
 MCP does not convert a filename or attachment metadata into parsed text.
 An empty Router poll (no items or gaps and no position advance) needs no ACK;
 a gap-only page does need its frozen page ACK with an empty receipt list.

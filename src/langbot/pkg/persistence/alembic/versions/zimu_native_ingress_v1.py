@@ -13,7 +13,7 @@ down_revision = '0037_metadata_text'
 branch_labels = None
 depends_on = None
 
-_TABLES = ('native_ingress_sources', 'native_ingress_pages', 'native_ingress_events', 'native_send_operations', 'native_ingress_access','native_ingress_gaps')
+_TABLES = ('native_ingress_sources', 'native_ingress_pages', 'native_ingress_events', 'native_send_operations', 'native_ingress_access','native_ingress_gaps','native_ingress_frames')
 
 
 _UNIQUES = {
@@ -22,7 +22,8 @@ _UNIQUES = {
     'native_ingress_events': {('source_id','position')},
     'native_send_operations': set(),
     'native_ingress_access': {('workspace_uuid','bot_uuid')},
-    'native_ingress_gaps': {('source_id','code'),('source_id','position')},
+    'native_ingress_frames': {('source_id','sequence'),('source_id','owner_event_id'),('source_id','frame_id')},
+    'native_ingress_gaps': {('source_id','owner_event_id'),('source_id','position')},
 }
 
 
@@ -55,8 +56,15 @@ def _create_table(name,*columns):
     valid=valid and pk=={key for key,column in expected.items() if column.primary_key}
     uniques={tuple(row['column_names']) for row in inspector.get_unique_constraints(name)}
     valid=valid and uniques==_UNIQUES[name]
+    foreign_keys=inspector.get_foreign_keys(name)
+    for foreign_key in foreign_keys:
+        options=foreign_key.get('options',{})
+        valid=valid and all(options.get(action) in {None,'NO ACTION'} for action in ('ondelete','onupdate'))
+        valid=valid and options.get('deferrable') in {None,False} and options.get('initially') in {None,'IMMEDIATE'}
+        valid=valid and options.get('match') in {None,'SIMPLE'}
+        valid=valid and foreign_key.get('referred_schema') in {None,inspector.default_schema_name}
     fks={(tuple(row['constrained_columns']),row['referred_table'],tuple(row['referred_columns']))
-         for row in inspector.get_foreign_keys(name)}
+         for row in foreign_keys}
     expected_fks={(('workspace_uuid','source_id'),'native_ingress_sources',('workspace_uuid','id'))}
     if name=='native_ingress_sources':
         expected_fks={(('workspace_uuid',),'workspaces',('uuid',)),
@@ -76,6 +84,8 @@ def upgrade():
         sa.Column('binding', sa.JSON, nullable=False),
         sa.Column('binding_sha256', sa.String(64), nullable=False),
         sa.Column('cursor', sa.Text, nullable=True),
+        sa.Column('owner_frame_sequences',sa.Boolean,nullable=False,server_default=sa.false()),
+        sa.Column('last_source_sequence',sa.BigInteger,nullable=True),
         sa.Column('position', sa.Integer, nullable=False, server_default='0'),
         sa.Column('router_cursor', sa.Integer, nullable=False, server_default='0'),
         sa.Column('router_pending_page', sa.String(64), nullable=True),
@@ -116,6 +126,8 @@ def upgrade():
         sa.Column('binding_sha256',sa.String(64),nullable=False),
         sa.Column('registration_request_id',sa.String(255),nullable=False),
         sa.Column('registered_by_account_uuid',sa.String(36),nullable=False),
+        sa.Column('source_authority',sa.JSON,nullable=True),
+        sa.Column('ui_observer_accounts',sa.JSON,nullable=False,server_default='[]'),
         sa.Column('source_enabled',sa.Boolean,nullable=False,server_default=sa.false()),
         sa.Column('source_revision',sa.Integer,nullable=False,server_default='1'),
         sa.Column('receiver_id',sa.String(255),nullable=True),
@@ -129,9 +141,20 @@ def upgrade():
         sa.Column('workspace_uuid',sa.String(36),nullable=False),
         sa.Column('source_id',sa.String(64),nullable=False),
         sa.Column('code',sa.String(64),nullable=False),
+        sa.Column('reason',sa.String(32),nullable=False,server_default='owner_source_gap'),
+        sa.Column('owner_event_id',sa.String(512),nullable=True),
+        sa.Column('source_sequence',sa.BigInteger,nullable=True),
         sa.Column('position',sa.Integer,nullable=False),
         sa.Column('upstream_cursor',sa.Text,nullable=False),
-        sa.UniqueConstraint('source_id','code'),sa.UniqueConstraint('source_id','position'),
+        sa.UniqueConstraint('source_id','owner_event_id'),sa.UniqueConstraint('source_id','position'),
+        sa.ForeignKeyConstraint(['workspace_uuid','source_id'],['native_ingress_sources.workspace_uuid','native_ingress_sources.id']))
+    _create_table('native_ingress_frames',
+        sa.Column('id',sa.String(64),primary_key=True),sa.Column('workspace_uuid',sa.String(36),nullable=False),
+        sa.Column('source_id',sa.String(64),nullable=False),sa.Column('sequence',sa.BigInteger,nullable=False),
+        sa.Column('owner_event_id',sa.String(512),nullable=True),sa.Column('frame_id',sa.String(64),nullable=False),
+        sa.Column('fingerprint',sa.String(64),nullable=False),
+        sa.UniqueConstraint('source_id','sequence'),sa.UniqueConstraint('source_id','owner_event_id'),
+        sa.UniqueConstraint('source_id','frame_id'),
         sa.ForeignKeyConstraint(['workspace_uuid','source_id'],['native_ingress_sources.workspace_uuid','native_ingress_sources.id']))
     if 'ix_native_ingress_events_pending' not in {i['name'] for i in sa.inspect(op.get_bind()).get_indexes('native_ingress_events')}:
         op.create_index('ix_native_ingress_events_pending', 'native_ingress_events',

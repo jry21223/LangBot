@@ -24,7 +24,11 @@ class NativeClientRegistry:
         self.secret_root=secret_root
 
     async def __call__(self,context,bot_uuid,binding,credential_ref):
-        await NativeAuthorization(self.ap).source_registration(context,bot_uuid,binding)
+        before=await NativeAuthorization(self.ap).source_registration(context,bot_uuid,binding)
+        from ..entity.persistence.native_ingress import NativeAccess
+        async with self.ap.persistence_mgr.tenant_uow(context.workspace_uuid) as uow:
+            row=await uow.session.get(NativeAccess,_hash([context.workspace_uuid,bot_uuid]))
+            expectation=row.source_authority
         if not isinstance(credential_ref,str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}',credential_ref):
             raise NativeAccessDenied('native_credential_reference_invalid')
         matches=[entry for entry in self.entries if entry.get('credential_ref')==credential_ref]
@@ -45,7 +49,27 @@ class NativeClientRegistry:
             # transport before a production constructor is registered here.
             if provider=='agent-wechat-v1':
                 raise NativeAccessDenied('native_thread_scoped_transport_required')
-            raise NativeAccessDenied('native_client_provider_not_supported')
+            if provider=='agent-wechat-owner-v1':
+                if not isinstance(expectation,dict) or expectation.get('kind')!='wechat-owner-v1':
+                    raise NativeAccessDenied('native_source_audience_profile_mismatch')
+                from .adapters.agent_wechat.owner_client import OwnerNativeClient
+                from .adapters.agent_wechat.owner_contract import NATIVE_V1
+                grant,resource=expectation['grant'],expectation['binding']
+                def constructor(endpoint,secret,account):
+                    return OwnerNativeClient(endpoint,secret,operator=grant['principal'],source=grant['source'],
+                        scope=grant['scope'],workspace=grant['workspace'],account=resource['account'],
+                        thread=resource['thread'],agent=grant['agent'],grant_revision=grant['revision'],
+                        binding_revision=resource['revision'],contract=NATIVE_V1)
+            elif provider=='wecom-archive-v1':
+                if not isinstance(expectation,dict) or expectation.get('kind')!='wecom-source-binding-v1':
+                    raise NativeAccessDenied('native_source_audience_profile_mismatch')
+                from .adapters.wecom_archive.reader import HttpSource
+                profile=expectation['binding']
+                def constructor(endpoint,secret,account):
+                    return HttpSource(endpoint,source=profile['source'],scope=profile['scope'],
+                        workspace=profile['workspace'],principal=profile['principal'],token=secret)
+            else:
+                raise NativeAccessDenied('native_client_provider_not_supported')
         else:
             constructor=self.constructors.get(provider)
             if not callable(constructor):
@@ -71,7 +95,9 @@ class NativeClientRegistry:
         finally:
             if secret_fd is not None: os.close(secret_fd)
             if root_fd is not None: os.close(root_fd)
-        await NativeAuthorization(self.ap).source_registration(context,bot_uuid,binding)
+        after=await NativeAuthorization(self.ap).source_registration(context,bot_uuid,binding)
+        if after!=before:
+            raise NativeAccessDenied('native_credential_registration_changed')
         return constructor(entry.get('endpoint'),secret,binding.account)
 
 

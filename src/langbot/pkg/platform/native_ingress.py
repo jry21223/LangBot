@@ -14,8 +14,8 @@ from datetime import datetime
 
 import sqlalchemy as sa
 
-from ..entity.persistence.native_ingress import NativeEvent, NativeGap, NativePage, NativeSend, NativeSource
-from .native_contract import NativeAccessDenied, AcceptanceReceipt, Authorize, SendProvider, SourceBinding, SourcePage
+from ..entity.persistence.native_ingress import NativeEvent, NativeFrame, NativeGap, NativePage, NativeSend, NativeSource
+from .native_contract import NativeAccessDenied, AcceptanceReceipt, Authorize, SendProvider, SourceBinding, SourcePage, SourceUnresolved
 
 
 def _json(value):
@@ -35,7 +35,7 @@ def _identifier(value, *, optional=False):
 
 
 _METADATA_FIELDS = {
-    'payload': {'change','native','native_version','event_cursor','business_at','origin','direction',
+    'payload': {'change','native','owner_event_id','native_version','event_cursor','business_at','origin','direction',
                 'message_type','body_sha256','media','recalled','dispatch_eligible','qualification','native_unresolved'},
     'change': {'source','scope','record','version','sequence','kind','business_at','observed_at','original',
                'projection_hash','goal_reference','saved','original_available'},
@@ -90,12 +90,15 @@ def _metadata(value, field='payload'):
 
 
 class NativeIngressStore:
-    def __init__(self, manager, *, workspace_uuid: str, bot_uuid: str, binding: SourceBinding, authorization_fence=None, change_validator=None, owner_gap_codes=frozenset()):
+    def __init__(self, manager, *, workspace_uuid: str, bot_uuid: str, binding: SourceBinding, authorization_fence=None, change_validator=None, owner_gap_codes=frozenset(), owner_frame_sequences=False):
         self.manager = manager
         self.workspace_uuid = _identifier(workspace_uuid)
         self.bot_uuid = _identifier(bot_uuid)
         if len(bot_uuid)>255 or len(workspace_uuid)>36:
             raise ValueError("native_owner_identifier_invalid")
+        if type(owner_frame_sequences) is not bool:
+            raise ValueError("native_sequence_domain_invalid")
+        self.owner_frame_sequences = owner_frame_sequences
         self.owner_gap_codes = frozenset(owner_gap_codes)
         self.change_validator = change_validator
         self.authorization_fence = authorization_fence
@@ -115,7 +118,7 @@ class NativeIngressStore:
 
     async def _source(self, session):
         row = await session.get(NativeSource, self.source_id)
-        if row is None or row.workspace_uuid != self.workspace_uuid or row.binding_sha256 != self.binding_hash:
+        if row is None or row.workspace_uuid != self.workspace_uuid or row.binding_sha256 != self.binding_hash or row.owner_frame_sequences != self.owner_frame_sequences:
             raise ValueError('native_binding_missing_or_changed')
         if self.authorization_fence is not None:
             from .native_access import check_fence
@@ -132,7 +135,7 @@ class NativeIngressStore:
             if source is None:
                 uow.session.add(NativeSource(id=self.source_id, workspace_uuid=self.workspace_uuid,
                     bot_uuid=self.bot_uuid, binding=asdict(self.binding), binding_sha256=self.binding_hash,
-                    cursor=initial_cursor))
+                    cursor=initial_cursor,owner_frame_sequences=self.owner_frame_sequences))
             else:
                 await self._source(uow.session)
 
@@ -140,8 +143,13 @@ class NativeIngressStore:
         async with self._own_transaction() as uow:
             return (await self._source(uow.session)).cursor
 
+    async def source_sequence_checkpoint(self):
+        """The owner's sequence watermark; never inferred from Core position."""
+        async with self._own_transaction() as uow:
+            return (await self._source(uow.session)).last_source_sequence
+
     async def accept_page(self, page: SourcePage, *, authorize: Authorize) -> AcceptanceReceipt:
-        if not isinstance(page, SourcePage) or page.complete is not True or len(page.events) > 100:
+        if not isinstance(page, SourcePage) or page.complete is not True or len(page.events)+len(page.unresolved) > 100:
             raise ValueError('native_complete_page_required')
         if (not isinstance(page.gaps,tuple) or len(page.gaps)>2 or any(not isinstance(code,str) for code in page.gaps) or len(set(page.gaps))!=len(page.gaps)
                 or any(code not in self.owner_gap_codes for code in page.gaps)):
@@ -151,6 +159,15 @@ class NativeIngressStore:
         envelopes = []
         for event in page.events:
             value = asdict(event)
+            if not isinstance(value['payload'],dict):
+                raise ValueError('native_metadata_invalid')
+            owner_sequence=value.get('owner_frame_sequence')
+            if self.owner_frame_sequences:
+                if type(owner_sequence) is not int or not 1<=owner_sequence<=2**63-1:
+                    raise ValueError('native_owner_frame_sequence_required')
+                _identifier(value['payload'].get('owner_event_id'))
+            elif owner_sequence is not None or 'owner_event_id' in value['payload']:
+                raise ValueError('native_owner_sequence_domain_required')
             for key in ('record', 'version', 'reference', 'kind'):
                 _identifier(value[key])
             if value['kind'] not in {'created', 'baseline', 'baseline_snapshot', 'changed', 'attachments_changed', 'recalled', 'unresolved'}:
@@ -166,11 +183,34 @@ class NativeIngressStore:
                 if self.change_validator is not None:
                     self.change_validator(change)
             envelopes.append(value)
+        unresolved=[]
+        if page.unresolved and not self.owner_frame_sequences:
+            raise ValueError('native_owner_sequence_domain_required')
+        if not isinstance(page.unresolved,tuple):
+            raise ValueError('native_unresolved_invalid')
+        for item in page.unresolved:
+            if not isinstance(item,SourceUnresolved):
+                raise ValueError('native_unresolved_invalid')
+            value=asdict(item)
+            for key in ('event_id','event_cursor','source','scope'):
+                _identifier(value[key])
+            if (value['reason']!='native_unresolved' or value['source']!=self.binding.source
+                    or value['scope']!=self.binding.scope or type(value['source_sequence']) is not int
+                    or not 1<=value['source_sequence']<=2**63-1):
+                raise ValueError('native_unresolved_invalid')
+            unresolved.append(value)
+        frames=[('event',value) for value in envelopes]+[('unresolved',value) for value in unresolved]
+        if frames and self.owner_frame_sequences:
+            def sequence(frame):
+                return frame[1]['source_sequence'] if frame[0]=='unresolved' else frame[1]['owner_frame_sequence']
+            if len({sequence(frame) for frame in frames})!=len(frames):
+                raise ValueError('native_source_sequence_conflict')
+            frames.sort(key=sequence)
         if len(_json(envelopes).encode()) > 1_000_000:
             raise ValueError('native_page_too_large')
         await authorize()
         page_id = _hash([self.source_id, "source", page.previous_cursor, page.next_cursor])
-        fingerprint = _hash(dict(events=envelopes,gaps=page.gaps))
+        fingerprint = _hash(dict(events=envelopes,gaps=page.gaps,unresolved=unresolved))
         receipt = None
         async with self._own_transaction() as uow:
             session = uow.session
@@ -184,8 +224,29 @@ class NativeIngressStore:
                 if source.cursor != page.previous_cursor:
                     raise ValueError('native_cursor_conflict')
                 event_ids = []
-                for value in envelopes:
+                for frame_kind,value in frames:
+                    if frame_kind=='unresolved':
+                        event_id=_hash([self.source_id,'native-unresolved',value['event_id']])
+                        await self._accept_frame(session,source,value['source_sequence'],value['event_id'],
+                                                 event_id,_hash(['unresolved',value]))
+                        old=await session.get(NativeGap,event_id)
+                        if old is None:
+                            source.position+=1
+                            session.add(NativeGap(id=event_id,workspace_uuid=self.workspace_uuid,source_id=self.source_id,
+                                code='native_unresolved',reason='native_unresolved',owner_event_id=value['event_id'],
+                                source_sequence=value['source_sequence'],position=source.position,upstream_cursor=value['event_cursor']))
+                        elif (old.reason!='native_unresolved' or old.owner_event_id!=value['event_id']
+                              or old.source_sequence!=value['source_sequence'] or old.upstream_cursor!=value['event_cursor']):
+                            raise ValueError('native_unresolved_conflict')
+                        event_ids.append(event_id)
+                        continue
                     event_id = _hash([self.source_id, value['record'], value['version']])
+                    if self.owner_frame_sequences:
+                        owner_eid=value['payload'].get('owner_event_id')
+                        if owner_eid is not None:
+                            _identifier(owner_eid)
+                        await self._accept_frame(session,source,value['owner_frame_sequence'],owner_eid,
+                                                 event_id,_hash(['event',value]))
                     old = await session.get(NativeEvent, event_id)
                     if old is not None:
                         if old.fingerprint != _hash(value):
@@ -205,6 +266,10 @@ class NativeIngressStore:
                         session.add(NativeGap(id=gap_id,workspace_uuid=self.workspace_uuid,source_id=self.source_id,
                             code=code,position=source.position,upstream_cursor=page.next_cursor))
                     event_ids.append(gap_id)
+                sequences=[value['owner_frame_sequence'] for value in envelopes if value.get('owner_frame_sequence') is not None]
+                sequences.extend(value['source_sequence'] for value in unresolved)
+                if sequences:
+                    source.last_source_sequence=max([source.last_source_sequence or 0,*sequences])
                 await session.flush()
                 changed = await session.execute(sa.update(NativeSource).where(
                     NativeSource.id == self.source_id,
@@ -218,6 +283,25 @@ class NativeIngressStore:
                 receipt = AcceptanceReceipt(page_id, page.next_cursor, tuple(event_ids))
         # The UoW has committed before an acknowledgement-capable receipt escapes.
         return receipt
+
+    async def _accept_frame(self,session,source,sequence,owner_event_id,frame_id,fingerprint):
+        index_id=_hash([self.source_id,'owner-sequence',sequence])
+        existing=await session.get(NativeFrame,index_id)
+        if existing is not None:
+            if (existing.frame_id!=frame_id or existing.owner_event_id!=owner_event_id
+                    or existing.fingerprint!=fingerprint):
+                raise ValueError('native_source_sequence_conflict')
+            return
+        identities=[NativeFrame.frame_id==frame_id]
+        if owner_event_id is not None:
+            identities.append(NativeFrame.owner_event_id==owner_event_id)
+        collision=(await session.execute(sa.select(NativeFrame).where(
+            NativeFrame.source_id==self.source_id,sa.or_(*identities),
+        ))).scalar_one_or_none()
+        if collision is not None or (source.last_source_sequence is not None and sequence<=source.last_source_sequence):
+            raise ValueError('native_source_identity_conflict')
+        session.add(NativeFrame(id=index_id,workspace_uuid=self.workspace_uuid,source_id=self.source_id,
+            sequence=sequence,owner_event_id=owner_event_id,frame_id=frame_id,fingerprint=fingerprint))
 
     async def pending_events(self, limit=100):
         if type(limit) is not int or not 1 <= limit <= 100:
@@ -291,8 +375,10 @@ class NativeIngressStore:
         items, gaps = [], []
         for event in rows:
             if isinstance(event,NativeGap):
-                gaps.append(dict(event_id=event.id,reason='owner_source_gap',source=self.binding.source,
-                                 scope=self.binding.scope,code=event.code))
+                value=dict(event_id=event.id,reason=event.reason,source=self.binding.source,scope=self.binding.scope)
+                if event.reason=='owner_source_gap':
+                    value['code']=event.code
+                gaps.append(value)
             elif event.envelope['kind'] == 'unresolved':
                 gaps.append(dict(event_id=event.id,reason='native_unresolved',
                                  source=self.binding.source,scope=self.binding.scope))
@@ -337,35 +423,38 @@ class NativeIngressStore:
                     raise NativeAccessDenied("native_router_receiver_mismatch")
                 if page.previous_cursor != cursor:
                     raise ValueError('native_router_ack_pending')
-                return await self._router_page_value(session, page)
-            if source.router_cursor != position:
-                raise ValueError('native_router_cursor_conflict')
-            rows = (await session.execute(sa.select(NativeEvent).where(
-                NativeEvent.source_id == self.source_id, NativeEvent.position > position,
-            ).order_by(NativeEvent.position).limit(limit))).scalars().all()
-            owner_gaps=(await session.execute(sa.select(NativeGap).where(
-                NativeGap.source_id==self.source_id,NativeGap.position>position,
-            ).order_by(NativeGap.position).limit(limit))).scalars().all()
-            rows=sorted([*rows,*owner_gaps],key=lambda row:row.position)[:limit]
-            next_cursor = str(rows[-1].position) if rows else str(position)
-            page_id = _hash([self.source_id, 'router', self.receiver_id, cursor, next_cursor])
-            items,gaps = self._router_parts(rows)
-            value = dict(page_id=page_id, source=self.binding.source, scope=self.binding.scope,
-                         complete_page=True, previous_cursor=cursor, next_cursor=next_cursor,
-                         gaps=gaps, items=items)
-            fingerprint = _hash(value)
-            # An empty poll has no acknowledgement and must not pin the feed.
-            if rows:
-                changed = await session.execute(sa.update(NativeSource).where(
-                    NativeSource.id == self.source_id, NativeSource.router_cursor == position,
-                    NativeSource.router_pending_page.is_(None),
-                ).values(router_pending_page=page_id))
-                if changed.rowcount != 1:
-                    raise ValueError('native_router_page_race')
-                session.add(NativePage(id=page_id, workspace_uuid=self.workspace_uuid,
-                    source_id=self.source_id, direction='router', receiver_id=self.receiver_id, previous_cursor=cursor,
-                    cursor=next_cursor, fingerprint=fingerprint, event_ids=[r.id for r in rows]))
-        return dict(value, page_sha256=fingerprint)
+                response=await self._router_page_value(session, page)
+            else:
+                if source.router_cursor != position:
+                    raise ValueError('native_router_cursor_conflict')
+                rows = (await session.execute(sa.select(NativeEvent).where(
+                    NativeEvent.source_id == self.source_id, NativeEvent.position > position,
+                ).order_by(NativeEvent.position).limit(limit))).scalars().all()
+                owner_gaps=(await session.execute(sa.select(NativeGap).where(
+                    NativeGap.source_id==self.source_id,NativeGap.position>position,
+                ).order_by(NativeGap.position).limit(limit))).scalars().all()
+                rows=sorted([*rows,*owner_gaps],key=lambda row:row.position)[:limit]
+                next_cursor = str(rows[-1].position) if rows else str(position)
+                page_id = _hash([self.source_id, 'router', self.receiver_id, cursor, next_cursor])
+                items,gaps = self._router_parts(rows)
+                value = dict(page_id=page_id, source=self.binding.source, scope=self.binding.scope,
+                             complete_page=True, previous_cursor=cursor, next_cursor=next_cursor,
+                             gaps=gaps, items=items)
+                fingerprint = _hash(value)
+                # An empty poll has no acknowledgement and must not pin the feed.
+                if rows:
+                    changed = await session.execute(sa.update(NativeSource).where(
+                        NativeSource.id == self.source_id, NativeSource.router_cursor == position,
+                        NativeSource.router_pending_page.is_(None),
+                    ).values(router_pending_page=page_id))
+                    if changed.rowcount != 1:
+                        raise ValueError('native_router_page_race')
+                    session.add(NativePage(id=page_id, workspace_uuid=self.workspace_uuid,
+                        source_id=self.source_id, direction='router', receiver_id=self.receiver_id, previous_cursor=cursor,
+                        cursor=next_cursor, fingerprint=fingerprint, event_ids=[r.id for r in rows]))
+                response=dict(value,page_sha256=fingerprint)
+        await authorize()
+        return response
 
     async def ack_router_page(self, page_id, page_sha256, receipts, *, authorize: Authorize):
         """Persist only the Host's committed producer receipts, never success claims."""
@@ -413,6 +502,9 @@ class NativeIngressStore:
                 source.router_pending_page = None
             elif source.router_cursor < int(page.cursor):
                 raise ValueError('native_router_ack_out_of_order')
+        # A failed remote post-check cannot undo this committed page receipt.
+        # The caller must reconcile the same page/receipt rather than rerun it.
+        await authorize()
         return dict(status='accepted', page_id=page_id, next_cursor=page.cursor)
 
     async def lookup_router_receipt(self, event_id, *, authorize: Authorize):
@@ -422,8 +514,11 @@ class NativeIngressStore:
             await self._source(uow.session)
             event = await uow.session.get(NativeEvent, event_id)
             if event is None or event.source_id != self.source_id:
-                return None
-            return event.receiver_receipt
+                result=None
+            else:
+                result=event.receiver_receipt
+        await authorize()
+        return result
 
     async def send(self, operation_id, target_type, target_id, payload, *, provider: SendProvider, authorize: Authorize):
         """A host-owned operation ID survives crashes and UNKNOWN lookup.
@@ -507,3 +602,43 @@ class NativeIngressStore:
             if latest.id!=row.id or latest.envelope['kind'] in {'recalled','recall'}:
                 raise NativeAccessDenied('native_original_changed_or_recalled')
             return row.envelope
+
+    async def ui_snapshot(self, *, limit=25, authorize: Authorize):
+        """Bounded durable metadata and producer receipts, never execution claims."""
+        if type(limit) is not int or not 1<=limit<=25:
+            raise ValueError('native_ui_limit_invalid')
+        await authorize()
+        async with self._own_transaction() as uow:
+            session=uow.session
+            await self._source(session)
+            normal=NativeEvent.envelope['kind'].as_string()!='unresolved'
+            async def count(model,*predicates):
+                return (await session.execute(sa.select(sa.func.count()).select_from(model).where(
+                    model.source_id==self.source_id,*predicates))).scalar_one()
+            source_events=await count(NativeEvent,normal)
+            accepted=await count(NativeEvent,normal,NativeEvent.receiver_receipt.is_not(None))
+            counts=dict(source_events=source_events,router_accepted=accepted,pending_host=source_events-accepted,
+                quarantines=await count(NativeGap,NativeGap.reason=='native_unresolved')+
+                    await count(NativeEvent,NativeEvent.envelope['kind'].as_string()=='unresolved'),
+                owner_gaps=await count(NativeGap,NativeGap.reason=='owner_source_gap'))
+            events=(await session.execute(sa.select(NativeEvent).where(NativeEvent.source_id==self.source_id)
+                .order_by(NativeEvent.position.desc()).limit(limit+1))).scalars().all()
+            gaps=(await session.execute(sa.select(NativeGap).where(NativeGap.source_id==self.source_id)
+                .order_by(NativeGap.position.desc()).limit(limit+1))).scalars().all()
+            rows=sorted([*events,*gaps],key=lambda row:row.position,reverse=True)
+            records=[]
+            for row in rows[:limit]:
+                if isinstance(row,NativeGap):
+                    records.append(dict(event_id=row.id,kind=row.reason,stage='quarantined'))
+                elif row.envelope['kind']=='unresolved':
+                    records.append(dict(event_id=row.id,kind='native_unresolved',stage='quarantined'))
+                else:
+                    value=dict(event_id=row.id,record=row.envelope['record'],version=row.envelope['version'],
+                        reference=row.envelope['reference'],kind=row.envelope['kind'],
+                        stage='router_accepted' if row.receiver_receipt is not None else 'source_accepted')
+                    if row.receiver_receipt is not None:
+                        value['receipt_id']=row.receiver_receipt['receipt_id']
+                    records.append(value)
+            result=dict(counts=counts,records=records,has_more=len(rows)>limit)
+        await authorize()
+        return result

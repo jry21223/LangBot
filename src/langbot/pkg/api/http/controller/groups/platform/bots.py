@@ -5,6 +5,7 @@ from ....authz import Permission, has_permission
 from ....context import RequestContext
 from ....service.bot_errors import BotApplyError, bot_error_message
 from ... import group
+from ..native_messages import message
 
 
 @group.group_class('bots', '/api/v1/platform/bots')
@@ -120,14 +121,19 @@ class BotsRouterGroup(group.RouterGroup):
             if not isinstance(json_data, dict):
                 return self.http_status(400, -1, 'invalid request body')
 
-            result = await self.ap.bot_service.dry_run_event_route(
-                request_context,
-                bot_uuid=bot_uuid,
-                event_type=json_data.get('event_type'),
-                event_data=json_data.get('event_data', json_data.get('payload')),
-                context=json_data.get('context'),
-                event_bindings=json_data.get('event_bindings'),
-            )
+            try:
+                result = await self.ap.bot_service.dry_run_event_route(
+                    request_context,
+                    bot_uuid=bot_uuid,
+                    event_type=json_data.get('event_type'),
+                    event_data=json_data.get('event_data', json_data.get('payload')),
+                    context=json_data.get('context'),
+                    event_bindings=json_data.get('event_bindings'),
+                )
+            except ValueError as exc:
+                if str(exc)=='native_ingress_debug_unavailable':
+                    return self.http_status(409,'native_ingress_debug_unavailable',message('routing_external'))
+                raise
             return self.success(data=result)
 
         self.route(
