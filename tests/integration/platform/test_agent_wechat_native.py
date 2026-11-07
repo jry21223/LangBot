@@ -6,7 +6,7 @@ import pytest
 from tests.unit_tests.platform.test_agent_wechat_projection import message
 from tests.unit_tests.platform.test_agent_wechat_source import event
 from langbot.pkg.platform.native_contract import SourceBinding
-from langbot.pkg.platform.native_ingress import NativeIngressStore
+from langbot.pkg.platform.native_ingress import NativeIngressStore, _hash
 from langbot.pkg.platform.adapters.agent_wechat.source import WxNativeSource
 from langbot.pkg.platform.adapters.agent_wechat.client import WxProtocolError
 
@@ -190,3 +190,33 @@ async def test_restart_reconciles_lost_ack_even_without_another_source_event(man
     replacement.ack.assert_awaited_once_with('consumer', '10')
     replacement.message.assert_not_called()
     assert await store.checkpoint() == '10'
+
+
+@pytest.mark.asyncio
+async def test_actual_wx_quarantine_does_not_starve_next_message_or_forge_host_receipt(manager):
+    source, client, store = setup(manager)
+    await source.initialize()
+    unresolved = dict(event(), kind='media.ready', data={'assetId': 'unapproved-or-not-yet-known'})
+    await source.accept_event(unresolved)
+    next_event = event()
+    next_event['cursor'] = '11'
+    await source.accept_event(next_event)
+    assert client.message.await_count == 1
+    assert await store.checkpoint() == '11'
+    page = await store.read_router_page('0', authorize=allowed)
+    assert len(page['gaps']) == 1
+    assert len(page['items']) == 1
+    assert page['gaps'][0]['reason'] == 'native_unresolved'
+    rows = await store.accepted_events(authorize=allowed)
+    real = next(item for item in rows['items'] if item['envelope']['kind'] != 'unresolved')
+    envelope = real['envelope']
+    receipt = {
+        'event_id': real['event_id'],
+        'source': 'fixture',
+        'record': envelope['record'],
+        'version': envelope['version'],
+        'status': 'accepted',
+        'receipt_id': _hash(['langbot-router-receipt-v1', 'fixture', envelope['record'], envelope['version']]),
+    }
+    await store.ack_router_page(page['page_id'], page['page_sha256'], [receipt], authorize=allowed)
+    assert await store.lookup_router_receipt(page['gaps'][0]['event_id'], authorize=allowed) is None
