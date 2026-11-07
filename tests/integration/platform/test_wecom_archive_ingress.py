@@ -182,3 +182,16 @@ async def test_disconnected_owner_keeps_existing_checkpoint(manager):
         with pytest.raises(SourceUnavailable):
             await adapter.poll_once()
         assert await store.checkpoint() == 'existing-checkpoint'
+
+
+@pytest.mark.asyncio
+async def test_native_connection_facts_do_not_invent_account_proof():
+    with archive_adapter() as (_, adapter):
+        facts = await adapter.native_connection_facts()
+        assert facts == {
+            'source': 'fixture-wecom',
+            'scope': 'fixture-chat',
+            'revision': 'grant-v1',
+            'workspace': 'workspace-a',
+        }
+        assert 'account' not in facts
