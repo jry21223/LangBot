@@ -40,6 +40,7 @@ def source_config():
 async def test_archive_source_has_no_send_reply_or_platform_api():
     adapter = WecomArchiveAdapter(source_config(), FixtureLogger())
     assert adapter.get_supported_apis() == []
+    assert adapter.native_authority_kind == 'workspace-grant'
     with pytest.raises(NotSupportedError):
         await adapter.send_message('group', 'fixture-chat', [])
     with pytest.raises(NotSupportedError):
