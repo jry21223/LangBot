@@ -234,3 +234,32 @@ def test_canonical_hash_rejects_nonfinite_and_preserves_unicode():
     for value in [float('nan'), float('inf'), -float('inf')]:
         with pytest.raises(ValueError):
             digest({'value': value})
+
+
+def test_saved_contract_is_validated_before_source_ack():
+    from copy import deepcopy
+    import pytest
+    from langbot.pkg.platform.adapters.agent_wechat.projection import validate_change, digest
+
+    envelope = project_message(
+        message(),
+        cursor='10',
+        origin='live',
+        account='account-1',
+        allowed_threads={'group-1'},
+        activation_at='2026-11-08T00:00:00Z',
+        source='fixture',
+        scope='scope',
+    )
+    validate_change(envelope.payload['change'])
+    for mutate in [
+        lambda c: c['saved'].update(body='private'),
+        lambda c: c.update(original='wechat:message/wrong'),
+        lambda c: c.update(sequence=True),
+        lambda c: c['saved'].update(direction='outgoing'),
+    ]:
+        bad = deepcopy(envelope.payload['change'])
+        mutate(bad)
+        bad['projection_hash'] = digest({key: value for key, value in bad.items() if key != 'projection_hash'})
+        with pytest.raises(ValueError):
+            validate_change(bad)

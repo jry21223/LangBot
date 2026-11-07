@@ -6,8 +6,8 @@ from pydantic import Field
 
 from langbot_plugin.api.definition.abstract.platform.adapter import AbstractMessagePlatformAdapter
 from langbot.pkg.platform.native_contract import SourceBinding
-from langbot.pkg.platform.adapters.agent_wechat.projection import digest, identity, timestamp
-from langbot.pkg.platform.adapters.agent_wechat.source import WxNativeSource
+from langbot.pkg.platform.adapters.agent_wechat.projection import digest, identity, timestamp, validate_change
+from langbot.pkg.platform.adapters.agent_wechat.source import WxNativeSource, connection_facts
 from langbot.pkg.platform.adapters.agent_wechat.client import WxProtocolError
 
 
@@ -37,6 +37,10 @@ class AgentWeChatAdapter(AbstractMessagePlatformAdapter):
         for key in ('account_id', 'source_id', 'scope_id', 'credential_ref', 'consumer_id', 'initial_cursor'):
             identity(config.get(key))
         timestamp(config.get('activation_at'))
+
+    @staticmethod
+    def native_validate_change(change):
+        validate_change(change)
 
     def native_credential_ref(self):
         return self.config['credential_ref']
@@ -92,7 +96,11 @@ class AgentWeChatAdapter(AbstractMessagePlatformAdapter):
         return self.worker
 
     async def native_connection_facts(self):
-        facts = await self._worker().native_connection_facts()
+        if self.client is None:
+            raise WxProtocolError('trusted_client_binding_required')
+        facts = await connection_facts(
+            self.client, self.config['account_id'], self.config['source_id'], self.config['scope_id']
+        )
         return dict(facts, revision=self.native_source_binding().revision)
 
     async def native_source_authority(self):

@@ -166,3 +166,57 @@ def test_native_manifest_is_discoverable_by_existing_core_ui_contract():
     fields = {field['name']: field for field in info['spec']['config']}
     assert fields['allowed_threads']['type'] == 'array[string]'
     assert 'token' not in fields
+
+
+@pytest.mark.asyncio
+async def test_trusted_factory_can_check_connection_before_ingress_attachment():
+    from langbot.pkg.platform.sources.agent_wechat import AgentWeChatAdapter
+    from langbot_plugin.api.definition.abstract.platform.event_logger import AbstractEventLogger
+
+    adapter = AgentWeChatAdapter(
+        {
+            'account_id': 'account-1',
+            'allowed_threads': ['group-1'],
+            'source_id': 'fixture',
+            'scope_id': 'scope',
+            'credential_ref': 'existing',
+            'consumer_id': 'consumer',
+            'initial_cursor': '9',
+            'activation_at': '2026-11-08T00:00:00Z',
+        },
+        AsyncMock(spec=AbstractEventLogger),
+    )
+    client = AsyncMock()
+    client.account_id = 'account-1'
+    client.status.return_value = {
+        'id': 'account-1',
+        'authenticated': True,
+        'contactSyncReady': True,
+        'connection': 'online',
+        'incomingTransport': 'native_push',
+    }
+    adapter.attach_native_client(client)
+    assert adapter.store is None
+    facts = await adapter.native_connection_facts()
+    assert facts['revision'] == adapter.native_source_binding().revision
+    assert facts['account'] == 'account-1'
+
+
+@pytest.mark.asyncio
+async def test_connection_facts_never_invent_missing_account_or_online_state():
+    from langbot.pkg.platform.adapters.agent_wechat.source import connection_facts
+
+    client = AsyncMock()
+    for state in [
+        {'authenticated': True, 'contactSyncReady': True},
+        {
+            'accountId': 'account-1',
+            'authenticated': True,
+            'contactSyncReady': True,
+            'connection': 'disconnected',
+            'incomingTransport': 'disconnected',
+        },
+    ]:
+        client.status.return_value = state
+        with pytest.raises(WxProtocolError):
+            await connection_facts(client, 'account-1', 'fixture', 'scope')

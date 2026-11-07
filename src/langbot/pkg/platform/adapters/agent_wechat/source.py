@@ -6,7 +6,21 @@ from hashlib import sha256
 
 from langbot.pkg.platform.native_contract import SourcePage, SourceEnvelope
 from .client import WxProtocolError
-from .projection import identity, project_message, digest, event_sequence
+from .projection import identity, project_message, digest, event_sequence, validate_change
+
+
+async def connection_facts(client, account, source, scope):
+    state = await client.status()
+    if state.get('id') != account:
+        raise WxProtocolError('account_binding_mismatch')
+    if (
+        state.get('authenticated') is not True
+        or state.get('contactSyncReady') is not True
+        or state.get('connection') != 'online'
+        or state.get('incomingTransport') != 'native_push'
+    ):
+        raise WxProtocolError('account_not_ready')
+    return {'source': source, 'account': account, 'scope': scope, 'connected': True}
 
 
 class WxNativeSource:
@@ -62,12 +76,7 @@ class WxNativeSource:
         return await self.native_connection_facts()
 
     async def native_connection_facts(self):
-        state = await self.client.status()
-        if state.get('accountId', self.account) != self.account:
-            raise WxProtocolError('account_binding_mismatch')
-        if state.get('authenticated') is not True or state.get('contactSyncReady') is not True:
-            raise WxProtocolError('account_not_ready')
-        return {'source': self.source, 'account': self.account, 'scope': self.scope, 'connected': True}
+        return await connection_facts(self.client, self.account, self.source, self.scope)
 
     async def _project(self, message_id, event, origin):
         await self.authorize()
@@ -129,6 +138,8 @@ class WxNativeSource:
                 )
                 if envelope is not None and not envelope.payload['recalled']:
                     raise WxProtocolError('recall_not_materialized')
+        if envelope is not None and envelope.kind != 'unresolved':
+            validate_change(envelope.payload['change'])
         events = () if envelope is None or (envelope.record, envelope.version) in self.versions else (envelope,)
         receipt = await self.store.accept_page(SourcePage(previous, event['cursor'], events), authorize=self.authorize)
         if events:

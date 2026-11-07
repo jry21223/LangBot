@@ -179,3 +179,74 @@ def project_message(
     change['projection_hash'] = digest(change)
     payload['change'] = change
     return SourceEnvelope(record, version, reference, kind, payload)
+
+
+def validate_change(change: dict) -> None:
+    """Validate the native saved contract before durable acceptance and source ACK."""
+    required = {
+        'source',
+        'scope',
+        'record',
+        'version',
+        'sequence',
+        'kind',
+        'business_at',
+        'observed_at',
+        'original',
+        'goal_reference',
+        'original_available',
+        'saved',
+        'projection_hash',
+    }
+    saved_keys = {
+        'account_id',
+        'thread_id',
+        'message_id',
+        'sender_id',
+        'server_id',
+        'direction',
+        'message_type',
+        'body_available',
+    }
+    if not isinstance(change, dict) or set(change) != required:
+        raise ValueError('invalid_native_change_keys')
+    for key in ('source', 'scope', 'record', 'version', 'original', 'projection_hash'):
+        identity(change[key])
+    for key in ('record', 'version', 'projection_hash'):
+        if len(change[key]) != 64 or any(c not in '0123456789abcdef' for c in change[key]):
+            raise ValueError('invalid_native_change_hash')
+    if change['original'] != 'wechat-native:message/' + change['record'] + '/' + change['version']:
+        raise ValueError('invalid_native_original_binding')
+    if type(change['sequence']) is not int:
+        raise ValueError('invalid_native_sequence')
+    event_sequence(str(change['sequence']))
+    if change['kind'] not in {'created', 'baseline', 'recalled'} or change['goal_reference'] is not None:
+        raise ValueError('invalid_native_change_kind')
+    timestamp(change['business_at'])
+    timestamp(change['observed_at'])
+    if type(change['original_available']) is not bool:
+        raise ValueError('invalid_native_availability')
+    saved = change['saved']
+    if not isinstance(saved, dict) or set(saved) != saved_keys:
+        raise ValueError('invalid_native_saved_keys')
+    for key in ('account_id', 'thread_id', 'message_id'):
+        identity(saved[key])
+    for key in ('sender_id', 'server_id'):
+        if saved[key] is not None:
+            identity(saved[key])
+    if saved['direction'] != 'incoming' or saved['message_type'] not in {
+        'text',
+        'image',
+        'voice',
+        'file',
+        'video',
+        'sticker',
+        'unknown',
+    }:
+        raise ValueError('invalid_native_saved_type')
+    if type(saved['body_available']) is not bool:
+        raise ValueError('invalid_native_body_availability')
+    if change['kind'] == 'recalled' and (saved['body_available'] or change['original_available']):
+        raise ValueError('recalled_original_available')
+    if digest({key: value for key, value in change.items() if key != 'projection_hash'}) != change['projection_hash']:
+        raise ValueError('native_projection_hash_mismatch')
