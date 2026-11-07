@@ -199,7 +199,14 @@ def project_message(
     return SourceEnvelope(record, version, reference, kind, payload)
 
 
-def validate_change(change: dict) -> None:
+def validate_change(
+    change: dict,
+    *,
+    reference_scheme='wechat-native',
+    change_kinds=frozenset({'created', 'baseline', 'recalled'}),
+    hash_excluded_fields=frozenset({'projection_hash'}),
+    verify_projection_hash=True,
+) -> None:
     """Validate the native saved contract before durable acceptance and source ACK."""
     required = {
         'source',
@@ -233,12 +240,12 @@ def validate_change(change: dict) -> None:
     for key in ('record', 'version', 'projection_hash'):
         if len(change[key]) != 64 or any(c not in '0123456789abcdef' for c in change[key]):
             raise ValueError('invalid_native_change_hash')
-    if change['original'] != 'wechat-native:message/' + change['record'] + '/' + change['version']:
+    if change['original'] != reference_scheme + ':message/' + change['record'] + '/' + change['version']:
         raise ValueError('invalid_native_original_binding')
     if type(change['sequence']) is not int:
         raise ValueError('invalid_native_sequence')
     event_sequence(str(change['sequence']))
-    if change['kind'] not in {'created', 'baseline', 'recalled'} or change['goal_reference'] is not None:
+    if change['kind'] not in change_kinds or change['goal_reference'] is not None:
         raise ValueError('invalid_native_change_kind')
     timestamp(change['business_at'])
     timestamp(change['observed_at'])
@@ -266,5 +273,8 @@ def validate_change(change: dict) -> None:
         raise ValueError('invalid_native_body_availability')
     if change['kind'] == 'recalled' and (saved['body_available'] or change['original_available']):
         raise ValueError('recalled_original_available')
-    if digest({key: value for key, value in change.items() if key != 'projection_hash'}) != change['projection_hash']:
+    if verify_projection_hash and (
+        digest({key: value for key, value in change.items() if key not in hash_excluded_fields})
+        != change['projection_hash']
+    ):
         raise ValueError('native_projection_hash_mismatch')

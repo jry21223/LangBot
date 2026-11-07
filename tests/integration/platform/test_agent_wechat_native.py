@@ -300,3 +300,38 @@ async def test_protected_core_reader_uses_fresh_wx_manifest_bytes_and_current_re
     with pytest.raises(PermissionError):
         await read_native_original(ap, reader, 'bot-workspace-a', 'media', ref, version, asset_id='asset-1')
     assert client.message.await_count == before
+
+
+@pytest.mark.asyncio
+async def test_owner_canonical_pages_persist_legacy_refs_and_derived_versions_without_shadow_identity(manager):
+    from langbot.pkg.platform.adapters.agent_wechat.owner_contract import OwnerPage, accept_owner_page
+    from tests.unit_tests.platform.test_agent_wechat_owner_contract import owner_change, FIXTURE_CONTRACT
+
+    binding = SourceBinding('existing-wechat', 'account-1', 'existing-scope', 'owner-protocol-candidate')
+    store = NativeIngressStore(manager, workspace_uuid='workspace-a', bot_uuid='bot-workspace-a', binding=binding)
+    await store.initialize('owner-before')
+    pending = owner_change(sequence=101, state='PENDING')
+    complete = owner_change(sequence=102, version='e' * 64)
+    page = OwnerPage('owner-before', 'owner-after', (pending, complete), True)
+    ack = AsyncMock()
+    await accept_owner_page(
+        store,
+        page,
+        authorize=allowed,
+        acknowledge=ack,
+        previous_sequence=100,
+        source='existing-wechat',
+        scope='existing-scope',
+        account='account-1',
+        thread='group-1',
+        contract=FIXTURE_CONTRACT,
+    )
+    rows = await store.accepted_events(authorize=allowed)
+    assert [row['envelope']['version'] for row in rows['items']] == ['b' * 64, 'e' * 64]
+    assert [row['envelope']['reference'] for row in rows['items']] == [
+        pending.change['original'],
+        complete.change['original'],
+    ]
+    assert all(row['envelope']['payload']['event_cursor'] == 'opaque-wx-cursor' for row in rows['items'])
+    assert [row['envelope']['payload']['change']['sequence'] for row in rows['items']] == [101, 102]
+    ack.assert_awaited_once()
