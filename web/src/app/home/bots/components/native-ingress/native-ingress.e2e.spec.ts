@@ -178,7 +178,7 @@ test('native channel can be created using only the existing form', async ({
   for (const [name, label] of fields)
     await page
       .getByText(new RegExp(`^${label}\\s*\\*$`))
-      .locator('..')
+      .locator('xpath=ancestor::*[@data-slot="form-item"][1]')
       .getByRole('textbox')
       .fill(`fixture-${name}`);
   const savedRequest = page.waitForRequest(
