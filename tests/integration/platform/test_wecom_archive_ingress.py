@@ -338,3 +338,57 @@ async def test_legal_media_evidence_is_durably_accepted_with_six_field_schema(ma
         accepted = (await store.accepted_events(authorize=authorized))['items']
         assert len(accepted) == 1
         assert await store.checkpoint() == 'cursor-one'
+
+
+@pytest.mark.asyncio
+async def test_real_owner_proof_and_current_registration_both_gate_admission(manager):
+    from types import SimpleNamespace
+    from langbot.pkg.platform.native_access import NativeAuthorization, register_native_access
+    from tests.integration.platform.test_native_ingress_contracts import context
+
+    with archive_adapter() as (server, adapter):
+        ap = SimpleNamespace(persistence_mgr=manager)
+        binding = adapter.native_source_binding()
+        auth = NativeAuthorization(ap)
+        with pytest.raises(PermissionError):
+            await auth.source_factory(context(), 'bot-workspace-a', binding, adapter)
+        server.binding_proof = {
+            'source': 'fixture-wecom',
+            'scope': 'fixture-chat',
+            'principal': 'fixture-reader',
+            'workspace': 'workspace-a',
+            'revision': 'grant-v1',
+            'corp_id': 'fixture-corp',
+            'origin': 'owner_source_binding',
+        }
+        await register_native_access(ap, context(), 'bot-workspace-a', binding, source_enabled=True)
+        authorize = await auth.source_factory(context(), 'bot-workspace-a', binding, adapter)
+        store = NativeIngressStore(
+            manager,
+            workspace_uuid='workspace-a',
+            bot_uuid='bot-workspace-a',
+            binding=binding,
+            authorization_fence=authorize.native_fence,
+            change_validator=adapter.native_validate_change,
+            owner_gap_codes=adapter.native_owner_gap_codes,
+        )
+        await store.initialize()
+        adapter.attach_native_ingress(store, authorize)
+        await adapter.poll_once()
+        assert await store.checkpoint() == 'cursor-one'
+        server.binding_proof['corp_id'] = 'unregistered-corp'
+        with pytest.raises(PermissionError):
+            await adapter.poll_once()
+        server.binding_proof['corp_id'] = 'fixture-corp'
+        await register_native_access(
+            ap, context(), 'bot-workspace-a', binding, source_enabled=False, expected_revision=1
+        )
+        with pytest.raises(PermissionError):
+            await adapter.poll_once()
+        with pytest.raises(PermissionError):
+            await store.checkpoint()
+        # Test-only database owner observation; the revoked runtime stays denied.
+        inspector = NativeIngressStore(
+            manager, workspace_uuid='workspace-a', bot_uuid='bot-workspace-a', binding=binding
+        )
+        assert await inspector.checkpoint() == 'cursor-one'
