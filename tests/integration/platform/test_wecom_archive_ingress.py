@@ -24,18 +24,27 @@ def archive_adapter():
     server.page_overrides.pop('previous_cursor')
     thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.02), daemon=True)
     thread.start()
+    from langbot.pkg.platform.adapters.wecom_archive.reader import HttpSource
+
     config = {
-        'source_endpoint': f'http://127.0.0.1:{server.server_port}/saved',
         'source': 'fixture-wecom',
         'account': 'fixture-corp',
         'scope': 'fixture-chat',
-        'source_workspace': 'workspace-a',
-        'source_principal': 'fixture-reader',
-        'source_token': 'fixture-reader-token-000000',
+        'credential_ref': 'fixture-metadata-reader',
         'grant_revision': 'grant-v1',
     }
+    client = HttpSource(
+        f'http://127.0.0.1:{server.server_port}/saved',
+        source='fixture-wecom',
+        scope='fixture-chat',
+        workspace='workspace-a',
+        principal='fixture-reader',
+        token='fixture-reader-token-000000',
+    )
+    adapter = WecomArchiveAdapter(config, FixtureLogger())
+    adapter.attach_native_client(client)
     try:
-        yield server, WecomArchiveAdapter(config, FixtureLogger())
+        yield server, adapter
     finally:
         server.shutdown()
         server.server_close()
@@ -80,6 +89,7 @@ async def test_replayed_source_revision_does_not_duplicate_after_adapter_restart
         adapter.attach_native_ingress(first, authorized)
         await adapter.poll_once()
         restarted = WecomArchiveAdapter(adapter.config, FixtureLogger())
+        restarted.attach_native_client(adapter._source_reader())
         second = NativeIngressStore(
             manager, workspace_uuid='workspace-a', bot_uuid='bot-workspace-a', binding=restarted.native_source_binding()
         )
@@ -263,3 +273,62 @@ async def test_persisted_admission_rejects_poisoned_saved_metadata(manager):
             await store.accept_page(page, authorize=authorized)
         assert await store.checkpoint() is None
         assert (await store.accepted_events(authorize=authorized))['items'] == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_workspace_cannot_borrow_another_owner_grant():
+    from langbot.pkg.platform.adapters.wecom_archive.reader import SourceUnavailable
+
+    with archive_adapter() as (_, adapter):
+        with pytest.raises(SourceUnavailable) as caught:
+            await adapter.authorize_native_source('another-workspace')
+        assert caught.value.status == 'permission_denied'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('media_type', ['image', 'voice', 'file'])
+async def test_legal_media_evidence_is_durably_accepted_with_six_field_schema(manager, media_type):
+    with archive_adapter() as (server, adapter):
+        item = server.page_overrides['items'][0]
+        item['kind'] = 'attachments_changed'
+        item['saved']['message'].update(
+            message_type=media_type,
+            media_evidence=[
+                {
+                    'mediaId': 'fixture-media',
+                    'mediaType': media_type,
+                    'sourceMd5': 'a' * 32,
+                    'contentSha256': 'b' * 64,
+                    'sourceFileSize': 7,
+                    'contentSize': 7,
+                }
+            ],
+            content_materialization={
+                'status': 'complete',
+                'parser_version': 'fixture-v1',
+                'input_hash': 'c' * 64,
+                'result_sha256': 'd' * 64,
+                'text_bytes': 7,
+                'parts': 1,
+            },
+        )
+        item['saved']['attachments'] = [
+            {'reference': 'wecom:media/fixture', 'status': 'saved', 'type': media_type, 'sha256': 'b' * 64, 'size': 7}
+        ]
+        store = NativeIngressStore(
+            manager,
+            workspace_uuid='workspace-a',
+            bot_uuid='bot-workspace-a',
+            binding=adapter.native_source_binding(),
+            change_validator=adapter.native_validate_change,
+        )
+        await store.initialize()
+
+        async def authorized():
+            await adapter.authorize_native_source('workspace-a')
+
+        adapter.attach_native_ingress(store, authorized)
+        await adapter.poll_once()
+        accepted = (await store.accepted_events(authorize=authorized))['items']
+        assert len(accepted) == 1
+        assert await store.checkpoint() == 'cursor-one'

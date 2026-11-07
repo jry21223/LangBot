@@ -50,6 +50,13 @@ running owner endpoint or parser.
 
 ## Remaining activation gates
 
+Bot configuration accepts only a credential reference and non-secret source binding.
+A trusted service factory must inject its scoped source client; endpoints, raw
+tokens and source principals are rejected in Bot configuration. This does not
+create or install a service-side credential registry entry. Its effective owner
+grant must be metadata-only; holding a broader token cannot be described as
+removing original-read access.
+
 The native manifest/configuration schema is pending explicit review and is not
 included in this candidate. Consequently backend discovery is not yet complete.
 No source credential, grant, audience, real account, or production configuration
