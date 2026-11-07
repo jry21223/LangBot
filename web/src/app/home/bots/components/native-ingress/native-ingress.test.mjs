@@ -101,3 +101,14 @@ test('withheld metadata is distinct from an authorized empty records array', () 
     true,
   );
 });
+
+test('an unconfigured disabled draft is explicit and exposes no stale source metadata', () => {
+  const result = parseNativeIngress({
+    ...synthetic,
+    state: 'needs_configuration',
+  });
+  assert.equal(result.state, 'needs_configuration');
+  assert.equal(result.counts, undefined);
+  assert.equal(result.recordsAvailable, false);
+  assert.deepEqual(result.records, []);
+});

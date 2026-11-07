@@ -2,6 +2,7 @@ export type NativeState =
   | 'source_available'
   | 'awaiting_upstream'
   | 'disabled'
+  | 'needs_configuration'
   | 'needs_authorization'
   | 'connecting'
   | 'connected'
@@ -36,6 +37,7 @@ const states = new Set<NativeState>([
   'source_available',
   'awaiting_upstream',
   'disabled',
+  'needs_configuration',
   'needs_authorization',
   'connecting',
   'connected',
@@ -78,7 +80,12 @@ export function parseNativeIngress(value: unknown): NativeSnapshot {
   )
     snapshot.error_code = input.error_code;
   // Never retain stale record identities when the current audience is missing.
-  if (!input || state === 'needs_authorization' || state === 'unknown')
+  if (
+    !input ||
+    state === 'needs_configuration' ||
+    state === 'needs_authorization' ||
+    state === 'unknown'
+  )
     return snapshot;
   const counts = object(input.counts);
   const names = [

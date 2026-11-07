@@ -3,6 +3,7 @@ export const nativeIngressEn = {
   routedBy:
     'Events are dispatched by the existing Router. Pipeline routing and plugin processors do not apply.',
   state: {
+    needs_configuration: 'Configure source settings',
     source_available: 'Source reachable; upstream not verified',
     awaiting_upstream: 'Awaiting upstream connection',
     disabled: 'Disabled',
@@ -33,6 +34,8 @@ export const nativeIngressEn = {
   more: 'Showing recent records only.',
   resultBoundary:
     'Router acceptance confirms handoff. Business execution and its result remain in the original OpenAgents thread.',
+  configurationHelp:
+    'Complete the source settings in Configuration before enabling this source.',
   authority:
     'This account is not yet approved to view this source. Ask an administrator to complete source access and viewing authorization.',
   upstreamHelp:
@@ -45,6 +48,7 @@ export const nativeIngressZhHans = {
   routedBy:
     '由现有 Router 派发，普通 Pipeline 路由和插件处理器不适用于此来源。',
   state: {
+    needs_configuration: '待完善来源配置',
     source_available: '来源可达，上游未核验',
     awaiting_upstream: '等待上游连接或采集',
     disabled: '已停用',
@@ -75,6 +79,7 @@ export const nativeIngressZhHans = {
   more: '仅显示最近记录。',
   resultBoundary:
     'Router 接纳只证明已交接，业务执行及结果仍在 OpenAgents 原线程中查看。',
+  configurationHelp: '请先在配置页完善并保存来源设置，再启用该来源。',
   authority: '此账号尚未获准查看该来源，请管理员完成来源接入与查看授权。',
   upstreamHelp: '请在现有微信底座确认登录，或等待同步完成。',
   sessions:
@@ -85,6 +90,7 @@ export const nativeIngressZhHant = {
   routedBy:
     '由現有 Router 派發，普通 Pipeline 路由和外掛處理器不適用於此來源。',
   state: {
+    needs_configuration: '待完善來源設定',
     source_available: '來源可達，上游未核驗',
     awaiting_upstream: '等待上游連線或採集',
     disabled: '已停用',
@@ -115,6 +121,7 @@ export const nativeIngressZhHant = {
   more: '僅顯示最近記錄。',
   resultBoundary:
     'Router 接納僅證明已交接，業務執行及結果仍在 OpenAgents 原執行緒中查看。',
+  configurationHelp: '請先在設定頁完善並儲存來源設定，再啟用此來源。',
   authority: '此帳號尚未獲准查看此來源，請管理員完成來源接入與查看授權。',
   upstreamHelp: '請在現有微信底座確認登入，或等待同步完成。',
   sessions:
@@ -126,6 +133,7 @@ export const nativeIngressJa = {
   routedBy:
     '既存の Router が振り分けます。通常の Pipeline ルーティングとプラグイン処理は適用されません。',
   state: {
+    needs_configuration: 'ソース設定が必要',
     source_available: 'ソースに到達可能・上流は未確認',
     awaiting_upstream: '上流の接続・収集待ち',
     disabled: '無効',
@@ -156,6 +164,8 @@ export const nativeIngressJa = {
   more: '最近の記録のみを表示しています。',
   resultBoundary:
     'Router の受け付けは引き継ぎのみを示します。業務の実行と結果は、元の OpenAgents スレッドで確認してください。',
+  configurationHelp:
+    '有効にする前に、設定画面でソースの設定を入力して保存してください。',
   authority:
     'このアカウントには、このソースを閲覧する権限がありません。管理者にソース接続と閲覧権限の設定を依頼してください。',
   upstreamHelp:
