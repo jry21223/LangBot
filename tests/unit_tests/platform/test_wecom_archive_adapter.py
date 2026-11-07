@@ -25,13 +25,10 @@ class FixtureLogger(AbstractEventLogger):
 
 def source_config():
     return {
-        'source_endpoint': 'https://archive.example.invalid/source',
         'source': 'fixture-wecom',
         'account': 'fixture-corp',
         'scope': 'fixture-chat',
-        'source_workspace': 'fixture-workspace',
-        'source_principal': 'fixture-reader',
-        'source_token': 'fixture-reader-token-000000',
+        'credential_ref': 'fixture-metadata-reader',
         'grant_revision': 'grant-v1',
     }
 
@@ -66,8 +63,10 @@ def test_native_manifest_uses_existing_component_loader_and_has_no_send_api():
 
 def test_adapter_representation_does_not_disclose_source_credentials():
     adapter = WecomArchiveAdapter(source_config(), FixtureLogger())
-    assert source_config()['source_token'] not in repr(adapter)
-    assert source_config()['source_token'] not in json.dumps(adapter.model_dump())
+    assert 'source_token' not in repr(adapter)
+    assert 'source_token' not in json.dumps(adapter.model_dump())
+    with pytest.raises(ValueError, match='archive_service_config_not_allowed'):
+        WecomArchiveAdapter(source_config() | {'source_token': 'not-accepted-in-bot-config'}, FixtureLogger())
 
 
 @pytest.mark.asyncio
@@ -80,10 +79,8 @@ async def test_native_source_requires_host_authorizer_before_poll_or_start():
 
 
 @pytest.mark.asyncio
-async def test_native_source_rejects_another_workspace_before_contacting_source():
-    from langbot.pkg.platform.adapters.wecom_archive.reader import SourceUnavailable
+async def test_native_source_requires_trusted_client_before_contacting_source():
 
     adapter = WecomArchiveAdapter(source_config(), FixtureLogger())
-    with pytest.raises(SourceUnavailable) as caught:
+    with pytest.raises(RuntimeError, match='native_source_client_not_configured'):
         await adapter.authorize_native_source('another-workspace')
-    assert caught.value.status == 'permission_denied'
