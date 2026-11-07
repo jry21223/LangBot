@@ -196,7 +196,7 @@ def test_unsupported_owner_gap_is_rejected_instead_of_reported_as_complete():
     from langbot.pkg.platform.adapters.wecom_archive.reader import SourceUnavailable
 
     page = archived_page()
-    page['gaps'] = ['history_before_feed_unverified']
+    page['gaps'] = ['unknown_gap_code']
     with pytest.raises(SourceUnavailable):
         project_page(page, SourceBinding('fixture-wecom', 'fixture-corp', 'fixture-chat', 'grant-v1'))
 
@@ -211,3 +211,13 @@ def test_unrecognized_change_metadata_is_rejected_before_projection():
         page['items'][0]['saved']['message'][key] = 'unapproved metadata'
         with pytest.raises(SourceUnavailable):
             project_page(page, binding)
+
+
+def test_known_owner_gaps_remain_independent_of_message_identity():
+    for code in ('history_before_feed_unverified', 'original_unavailable'):
+        page = archived_page()
+        page['gaps'] = [code]
+        projected = project_page(page, SourceBinding('fixture-wecom', 'fixture-corp', 'fixture-chat', 'grant-v1'))
+        assert projected.gaps == (code,)
+        assert len(projected.events) == 1
+        assert projected.events[0].record == 'message-one'

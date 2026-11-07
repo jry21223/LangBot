@@ -11,13 +11,14 @@ from langbot_plugin.api.definition.abstract.platform.adapter import AbstractPlat
 from langbot_plugin.api.entities.builtin.platform.errors import NotSupportedError
 
 from langbot.pkg.platform.native_contract import SourceBinding
-from .reader import HttpSource, SourceUnavailable
+from .reader import HttpSource, SourceUnavailable, OWNER_GAP_CODES
 from .projection import project_page, validate_change
 
 
 class WecomArchiveAdapter(AbstractPlatformAdapter):
     native_authority_kind: ClassVar[str] = 'workspace-grant'
     native_client_required: ClassVar[bool] = True
+    native_owner_gap_codes: ClassVar[frozenset[str]] = OWNER_GAP_CODES
     config: dict = pydantic.Field(exclude=True, repr=False)
     listeners: dict = pydantic.Field(default_factory=dict, exclude=True)
     _reader: HttpSource | None = pydantic.PrivateAttr(default=None)
