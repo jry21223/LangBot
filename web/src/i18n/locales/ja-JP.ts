@@ -1,4 +1,4 @@
-import { nativeIngressEn as nativeIngress } from './native-ingress';
+import { nativeIngressJa as nativeIngress } from './native-ingress';
 import slackSetup from './slack-setup/ja-JP';
 import pipelineMigration from './pipeline-migration/ja-JP';
 const jaJP = {

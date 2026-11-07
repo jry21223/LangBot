@@ -118,3 +118,44 @@ export const nativeIngressZhHant = {
   sessions:
     '此來源使用現有 Router 和 OpenAgents 原執行緒，不建立 Pipeline 聊天工作階段。',
 };
+
+export const nativeIngressJa = {
+  title: 'ネイティブメッセージソース',
+  routedBy:
+    '既存の Router が振り分けます。通常の Pipeline ルーティングとプラグイン処理は適用されません。',
+  state: {
+    source_available: 'ソースに到達可能・上流は未確認',
+    awaiting_upstream: '上流の接続・収集待ち',
+    disabled: '無効',
+    needs_authorization: 'ソースの権限設定が必要',
+    connecting: '接続中',
+    connected: '接続済み',
+    disconnected: '切断',
+    error: '接続エラー',
+    unknown: '未確認',
+  },
+  counts: {
+    source_events: 'ソース受け付け済み',
+    router_accepted: 'Router 受け付け済み',
+    pending_host: 'Router 待ち',
+    quarantines: '隔離済み',
+    owner_gaps: '取得範囲の欠落',
+  },
+  stage: {
+    source_accepted: 'ソース受け付け済み',
+    router_accepted: 'Router 受け付け済み',
+    quarantined: '隔離済み',
+  },
+  record: 'ネイティブ記録',
+  version: 'バージョン',
+  receipt: '受領証',
+  kind: '種類',
+  empty: '表示できる受け付け済み記録はありません。',
+  more: '最近の記録のみを表示しています。',
+  resultBoundary:
+    'Router の受け付けは引き継ぎのみを示します。業務の実行と結果は、元の OpenAgents スレッドで確認してください。',
+  authority:
+    '管理されたサービス経路で正確なソースと閲覧対象を登録してください。認証情報の参照だけではアクセス権は付与されません。',
+  sessions:
+    'このソースは既存の Router と元の OpenAgents スレッドを使います。Pipeline のチャットセッションは作成しません。',
+};
