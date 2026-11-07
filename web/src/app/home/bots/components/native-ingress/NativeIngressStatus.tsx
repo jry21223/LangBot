@@ -33,6 +33,11 @@ export default function NativeIngressStatus({
             {status.error_code}
           </p>
         )}
+        {status.state === 'needs_configuration' && (
+          <p className="text-sm text-muted-foreground">
+            {t('nativeIngress.configurationHelp')}
+          </p>
+        )}
         {status.state === 'needs_authorization' && (
           <p className="text-sm text-muted-foreground">
             {t('nativeIngress.authority')}
