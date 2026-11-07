@@ -151,3 +151,18 @@ async def test_raw_send_cannot_use_read_grant_as_send_grant():
     with pytest.raises(WxProtocolError, match='scope'):
         await provider.send('host-operation', 'group', 'unapproved', {'text': 'synthetic'})
     client.send_text.assert_not_called()
+
+
+def test_native_manifest_is_discoverable_by_existing_core_ui_contract():
+    from langbot.pkg.discover.engine import ComponentDiscoveryEngine
+
+    discovery = ComponentDiscoveryEngine(None)
+    component = discovery.load_component_manifest('pkg/platform/sources/agent_wechat.yaml')
+    assert component.kind == 'MessagePlatformAdapter'
+    assert component.get_python_component_class().__name__ == 'AgentWeChatAdapter'
+    info = component.to_plain_dict()
+    assert info['label']['zh_Hans'] == '个人微信'
+    assert info['label']['en_US'] == 'Personal WeChat'
+    fields = {field['name']: field for field in info['spec']['config']}
+    assert fields['allowed_threads']['type'] == 'array[string]'
+    assert 'token' not in fields
