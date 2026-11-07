@@ -39,6 +39,10 @@ DIRECTORY_PROJECTION_POLICY_NAME = 'langbot_directory_projection'
 # Keep this contract explicit. A new tenant-owned table must be added to both
 # this runtime list and the corresponding Alembic migration before release.
 TENANT_TABLE_COLUMNS: dict[str, str] = {
+    'native_ingress_sources': 'workspace_uuid',
+    'native_ingress_pages': 'workspace_uuid',
+    'native_ingress_events': 'workspace_uuid',
+    'native_send_operations': 'workspace_uuid',
     'workspaces': 'uuid',
     'workspace_memberships': 'workspace_uuid',
     'workspace_invitations': 'workspace_uuid',
