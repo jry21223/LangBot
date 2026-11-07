@@ -40,8 +40,11 @@ async def main():
             original_commit(connection)
             os._exit(32)
         dialect.do_commit = crash_at_database_commit
-        event = SourceEnvelope('native-crash','v1','source:message/native-crash/v1','created',
-                               {'native_id':'native-crash','dispatch_eligible':True})
+        change = dict(source='test-source',scope='chat-a',record='native-crash',version='v1',sequence=1,
+            kind='created',business_at='2026-11-08T00:00:00Z',observed_at='2026-11-08T00:00:01Z',
+            original='source:message/native-crash/v1',projection_hash='a'*64,goal_reference=None,saved={})
+        event = SourceEnvelope('native-crash','v1',change['original'],'created',
+                               {'change':change,'dispatch_eligible':True})
         await store.accept_page(SourcePage('10','11',(event,)),authorize=allowed)
     await manager.shutdown()
 

@@ -43,16 +43,13 @@ class NativeIngressRouterGroup(group.RouterGroup):
         @self.route('/<bot_uuid>/registration', methods=['PUT'],
                     auth_type=group.AuthType.USER_TOKEN, permission=Permission.API_KEY_MANAGE)
         async def register(bot_uuid, request_context):
-            from .....platform.native_access import register_native_access
+            from .....platform.native_access import register_native_access, registration_binding
             # The service additionally requires ACCOUNT and resource.manage;
             # support/global keys cannot register source audiences.
-            runtime = await self.ap.platform_mgr.get_bot_by_uuid(request_context,bot_uuid)
-            if runtime is None or not callable(getattr(runtime.adapter,'native_source_binding',None)):
-                return self.http_status(404,'native_bot_missing','Native source bot not found')
             body = await quart.request.get_json()
-            allowed = {'receiver_id','receiver_api_key_uuid','source_enabled','receiver_enabled'}
+            allowed = {'receiver_id','receiver_api_key_uuid','source_enabled','receiver_enabled','expected_revision'}
             if not isinstance(body,dict) or not set(body) <= allowed:
                 return self.http_status(400,'native_registration_invalid','Only registration settings are accepted')
             result = await register_native_access(self.ap,request_context,bot_uuid,
-                runtime.adapter.native_source_binding(),**body)
+                await registration_binding(self.ap,request_context,bot_uuid),**body)
             return self.success(data=result)

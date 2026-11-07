@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import asdict
 from hashlib import sha256
 import json
+import re
+from datetime import datetime
 
 import sqlalchemy as sa
 
@@ -48,10 +50,11 @@ def _metadata(value):
 
 
 class NativeIngressStore:
-    def __init__(self, manager, *, workspace_uuid: str, bot_uuid: str, binding: SourceBinding, authorization_fence=None):
+    def __init__(self, manager, *, workspace_uuid: str, bot_uuid: str, binding: SourceBinding, authorization_fence=None, change_validator=None):
         self.manager = manager
         self.workspace_uuid = _identifier(workspace_uuid)
         self.bot_uuid = _identifier(bot_uuid)
+        self.change_validator = change_validator
         self.authorization_fence = authorization_fence
         self.receiver_id = getattr(authorization_fence, "receiver_id", None)
         self.binding = binding
@@ -104,11 +107,18 @@ class NativeIngressStore:
             value = asdict(event)
             for key in ('record', 'version', 'reference', 'kind'):
                 _identifier(value[key])
-            if value['kind'] not in {'created', 'updated', 'media', 'recall', 'baseline', 'baseline_snapshot', 'changed', 'attachments_changed', 'recalled'}:
+            if value['kind'] not in {'created', 'baseline', 'baseline_snapshot', 'changed', 'attachments_changed', 'recalled', 'unresolved'}:
                 raise ValueError('native_event_kind_invalid')
             if not isinstance(value['payload'], dict):
                 raise ValueError('native_metadata_invalid')
             _metadata(value['payload'])
+            if value['kind'] == 'unresolved':
+                if 'change' in value['payload'] or not isinstance(value['payload'].get('native_unresolved'), dict):
+                    raise ValueError('native_quarantine_invalid')
+            else:
+                change = self._checked_change(value)
+                if self.change_validator is not None:
+                    self.change_validator(change)
             envelopes.append(value)
         if len(_json(envelopes).encode()) > 1_000_000:
             raise ValueError('native_page_too_large')
@@ -190,19 +200,38 @@ class NativeIngressStore:
         if type(value) is not int or not 1 <= value <= 100:
             raise ValueError('native_limit_invalid')
 
-    def _router_change(self, event):
-        change = event.envelope['payload'].get('change')
+    def _checked_change(self, envelope):
+        change = envelope['payload'].get('change')
         required = {'source', 'scope', 'record', 'version', 'sequence', 'kind', 'business_at',
                     'observed_at', 'original', 'projection_hash', 'goal_reference', 'saved'}
         if not isinstance(change, dict) or set(change) not in (required, required | {'original_available'}):
             raise ValueError('native_router_change_contract_invalid')
         expected = dict(source=self.binding.source, scope=self.binding.scope,
-                        record=event.envelope['record'], version=event.envelope['version'])
+                        record=envelope['record'], version=envelope['version'])
         if any(change[key] != value for key, value in expected.items()):
             raise ValueError('native_router_identity_mismatch')
-        if change['original'] != event.envelope['reference'] or change['kind'] != event.envelope['kind']:
+        if change['original'] != envelope['reference'] or change['kind'] != envelope['kind']:
             raise ValueError('native_router_original_mismatch')
+        if (type(change['sequence']) is not int or change['sequence'] < 1
+                or not isinstance(change['projection_hash'],str)
+                or not re.fullmatch(r'[0-9a-f]{64}',change['projection_hash'])
+                or not isinstance(change['saved'],dict)
+                or type(change.get('original_available',True)) is not bool):
+            raise ValueError('native_router_change_invalid')
+        for key in ('business_at','observed_at'):
+            try:
+                instant = datetime.fromisoformat(change[key].replace('Z','+00:00'))
+                if instant.utcoffset() is None:
+                    raise ValueError()
+            except (TypeError,AttributeError,ValueError):
+                raise ValueError('native_router_time_invalid') from None
+        code = change['goal_reference']
+        if code is not None and (not isinstance(code,str) or not re.fullmatch(r'GD-[A-Za-z0-9-]{1,60}',code)):
+            raise ValueError('native_router_goal_invalid')
         return change
+
+    def _router_change(self, event):
+        return self._checked_change(event.envelope)
 
     async def _router_page_value(self, session, page):
         items = []

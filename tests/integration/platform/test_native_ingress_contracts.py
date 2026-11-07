@@ -48,8 +48,7 @@ async def allowed():
 
 
 def event(record='native-1', *, version='v1'):
-    return SourceEnvelope(record, version, 'source:message/'+record+'/'+version, 'created',
-                          {'native_id': record, 'dispatch_eligible': True})
+    return router_event(record,version=version)
 
 
 @pytest.mark.asyncio
@@ -182,7 +181,8 @@ async def test_invalid_page_rolls_back_events_and_cursor(manager):
     assert await ingress.checkpoint() == '10'
     assert (await ingress.accepted_events(authorize=allowed))['items'] == []
     await ingress.accept_page(SourcePage('10','11',(event(),)),authorize=allowed)
-    changed = SourceEnvelope('native-1','v1','source:message/native-1/v1','created',{'native_id':'changed'})
+    changed = router_event()
+    changed.payload['native_id'] = 'changed'
     with pytest.raises(ValueError, match='version_conflict'):
         await ingress.accept_page(SourcePage('11','12',(event('native-2'),changed)),authorize=allowed)
     assert await ingress.checkpoint() == '11'
@@ -285,7 +285,7 @@ async def test_receiver_registration_is_exact_current_and_rejects_privileged_or_
     receiver = context(principal_type='api_key',key='dedicated-key',permissions=[])
     with pytest.raises(PermissionError):
         await auth.receiver_factory(receiver,'bot-workspace-a',ingress.binding)
-    await register_native_access(ap,context(),'bot-workspace-a',ingress.binding,**registration,source_enabled=True,receiver_enabled=True)
+    await register_native_access(ap,context(),'bot-workspace-a',ingress.binding,**registration,source_enabled=True,receiver_enabled=True,expected_revision=1)
     authorize = await auth.receiver_factory(receiver,'bot-workspace-a',ingress.binding)
     await authorize()
     for bad_context in [context(),context(principal_type='api_key',key='global-oss-api-key'),
@@ -320,14 +320,14 @@ async def test_source_factory_and_transaction_fence_block_revoke_after_preflight
     async def facts():
         return dict(source='test-source',account='account-a',scope='chat-a',revision='grant-v1')
     authorize = await NativeAuthorization(ap).source_factory(context(),'bot-workspace-a',ingress.binding,
-                                                            SimpleNamespace(native_connection_facts=facts))
+                                                            SimpleNamespace(native_connection_facts=facts,native_authority_kind="account-session"))
     await authorize()
     fenced = NativeIngressStore(manager,workspace_uuid='workspace-a',bot_uuid='bot-workspace-a',binding=ingress.binding,
                                 authorization_fence=authorize.native_fence)
     await fenced.initialize('10')
     async def revoke_after_preflight():
         await authorize()
-        await register_native_access(ap,context(),'bot-workspace-a',ingress.binding,source_enabled=False)
+        await register_native_access(ap,context(),'bot-workspace-a',ingress.binding,source_enabled=False,expected_revision=1)
     with pytest.raises(PermissionError,match='registration_revoked'):
         await fenced.accept_page(SourcePage('10','11',(event(),)),authorize=revoke_after_preflight)
     assert await ingress.checkpoint() == '10'
@@ -342,3 +342,91 @@ async def test_registration_requires_actual_account_and_both_management_permissi
                 context(permissions=['resource.manage'])]:
         with pytest.raises(Exception):
             await register_native_access(ap,bad,'bot-workspace-a',store(manager).binding)
+
+
+@pytest.mark.asyncio
+async def test_native_schema_upgrade_from_0037_and_non_destructive_application_rollback(tmp_path):
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from langbot.pkg.persistence.alembic_runner import run_alembic_upgrade,run_alembic_stamp,run_alembic_downgrade,get_alembic_current
+    engine = create_async_engine('sqlite+aiosqlite:///'+str(tmp_path/'migration.db'))
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda c: Base.metadata.create_all(c,tables=[User.__table__,Workspace.__table__,Bot.__table__]))
+        await run_alembic_stamp(engine,'0037_metadata_text')
+        await run_alembic_upgrade(engine)
+        assert await get_alembic_current(engine) == 'zimu_native_ingress_v1'
+        async with engine.begin() as conn:
+            names = await conn.run_sync(lambda c: set(sa.inspect(c).get_table_names()))
+            assert {table.name for table in NATIVE_TABLES} <= names
+        await run_alembic_downgrade(engine,'0037_metadata_text')
+        assert await get_alembic_current(engine) == '0037_metadata_text'
+        await run_alembic_upgrade(engine)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_registration_compare_and_set_prevents_stale_admin_overwrite(manager):
+    from langbot.pkg.platform.native_access import register_native_access
+    ap = SimpleNamespace(persistence_mgr=manager)
+    binding = store(manager).binding
+    first = await register_native_access(ap,context(),'bot-workspace-a',binding)
+    second = await register_native_access(ap,context(),'bot-workspace-a',binding,expected_revision=first['source_revision'])
+    assert second['source_revision'] == 2
+    with pytest.raises(ValueError,match='revision_conflict'):
+        await register_native_access(ap,context(),'bot-workspace-a',binding,expected_revision=1,source_enabled=True)
+
+
+@pytest.mark.asyncio
+async def test_first_registration_uses_persistent_disabled_bot_without_runtime_or_credentials(manager):
+    from langbot.pkg.platform.native_access import registration_binding, register_native_access
+    class Adapter:
+        def __init__(self,config,logger):
+            assert config == {}
+        def native_source_binding(self):
+            return SourceBinding('test-source','account-a','chat-a','grant-v1',False)
+    ap = SimpleNamespace(persistence_mgr=manager,platform_mgr=SimpleNamespace(adapter_dict={'test':Adapter}))
+    binding = await registration_binding(ap,context(),'bot-workspace-a')
+    result = await register_native_access(ap,context(),'bot-workspace-a',binding)
+    assert result['source_enabled'] is False
+    assert result['binding_sha256'] == store(manager).binding_hash
+
+
+@pytest.mark.asyncio
+async def test_poison_router_change_is_rejected_before_source_ack_and_following_page_survives(manager):
+    ingress = store(manager)
+    await ingress.initialize('10')
+    for poison in [SourceEnvelope('native-1','v1','source:message/native-1/v1','created',{}),
+                   SourceEnvelope('native-1','v1','source:message/native-1/v1','created',{'change':{}})]:
+        with pytest.raises(ValueError,match='contract_invalid'):
+            await ingress.accept_page(SourcePage('10','11',(poison,)),authorize=allowed)
+        assert await ingress.checkpoint() == '10'
+        assert (await ingress.accepted_events(authorize=allowed))['items'] == []
+    await ingress.accept_page(SourcePage('10','11',(event(),)),authorize=allowed)
+    assert (await ingress.read_router_page(None,authorize=allowed))['items'][0]['envelope']['record']=='native-1'
+
+
+@pytest.mark.asyncio
+async def test_disabled_bot_registration_http_bootstrap_does_not_need_running_adapter(manager, monkeypatch):
+    import quart
+    from langbot.pkg.api.http.controller.groups.native_ingress import NativeIngressRouterGroup
+    class Adapter:
+        def __init__(self,config,logger):
+            pass
+        def native_source_binding(self):
+            return SourceBinding('test-source','account-a','chat-a','grant-v1',False)
+    ap=SimpleNamespace(persistence_mgr=manager,platform_mgr=SimpleNamespace(adapter_dict={'test':Adapter}))
+    web=quart.Quart('native-bootstrap')
+    group=NativeIngressRouterGroup(ap,web)
+    async def no_support(*args): return None
+    async def account(*args): return ({},'operator')
+    async def account_context(*args): return context()
+    monkeypatch.setattr(group,'_authenticate_support_admin',no_support)
+    monkeypatch.setattr(group,'_authenticate_account',account)
+    monkeypatch.setattr(group,'_resolve_account_context',account_context)
+    await group.initialize()
+    response=await web.test_client().put('/api/v1/native-ingress/bot-workspace-a/registration',
+        headers={'Authorization':'Bearer synthetic-test-identity'},json={})
+    assert response.status_code==200,await response.get_json()
+    body=await response.get_json()
+    assert body['data']['source_enabled'] is False and body['data']['receiver_enabled'] is False
