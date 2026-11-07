@@ -71,3 +71,31 @@ async def test_native_legacy_logs_recheck_audience_after_logger_read(tmp_path,re
         assert (await client.post(path+'/logs',headers=headers,json={})).status_code==403
         assert calls==[1]
         assert (await client.get(path+'/event-routes/status',headers=headers)).status_code==403
+
+
+@pytest.mark.asyncio
+async def test_browser_backend_fixture_serves_only_container_loopback(tmp_path):
+    import asyncio
+    import aiohttp
+    from hypercorn.asyncio import serve
+    from hypercorn.config import Config
+    async with native_browser_fixture(tmp_path) as web:
+        stopped=asyncio.Event()
+        config=Config()
+        config.bind=['127.0.0.1:5300']
+        task=asyncio.create_task(serve(web,config,shutdown_trigger=stopped.wait))
+        try:
+            async with aiohttp.ClientSession() as client:
+                for attempt in range(50):
+                    try:
+                        async with client.get('http://127.0.0.1:5300/__fixture/health') as response:
+                            payload=await response.json()
+                            assert payload['ready'] is True and payload['token']==TOKEN
+                            break
+                    except aiohttp.ClientConnectorError:
+                        if attempt==49:
+                            raise
+                        await asyncio.sleep(0.02)
+        finally:
+            stopped.set()
+            await task
