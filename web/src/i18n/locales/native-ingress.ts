@@ -34,7 +34,9 @@ export const nativeIngressEn = {
   resultBoundary:
     'Router acceptance confirms handoff. Business execution and its result remain in the original OpenAgents thread.',
   authority:
-    'Register the exact source and audience through the controlled service path. A credential reference alone grants no access.',
+    'This account is not yet approved to view this source. Ask an administrator to complete source access and viewing authorization.',
+  upstreamHelp:
+    'Check login in the existing WeChat service, or wait for synchronization.',
   sessions:
     'This source uses the existing Router and OpenAgents thread; it does not create a Pipeline chat session.',
 };
@@ -73,8 +75,8 @@ export const nativeIngressZhHans = {
   more: '仅显示最近记录。',
   resultBoundary:
     'Router 接纳只证明已交接，业务执行及结果仍在 OpenAgents 原线程中查看。',
-  authority:
-    '请通过受控服务登记准确来源与受众，填写凭据引用本身不会获得访问权限。',
+  authority: '此账号尚未获准查看该来源，请管理员完成来源接入与查看授权。',
+  upstreamHelp: '请在现有微信底座确认登录，或等待同步完成。',
   sessions:
     '此来源使用现有 Router 和 OpenAgents 原线程，不创建 Pipeline 聊天会话。',
 };
@@ -113,8 +115,8 @@ export const nativeIngressZhHant = {
   more: '僅顯示最近記錄。',
   resultBoundary:
     'Router 接納僅證明已交接，業務執行及結果仍在 OpenAgents 原執行緒中查看。',
-  authority:
-    '請透過受控服務登記準確來源與受眾，填寫憑據參照本身不會獲得存取權限。',
+  authority: '此帳號尚未獲准查看此來源，請管理員完成來源接入與查看授權。',
+  upstreamHelp: '請在現有微信底座確認登入，或等待同步完成。',
   sessions:
     '此來源使用現有 Router 和 OpenAgents 原執行緒，不建立 Pipeline 聊天工作階段。',
 };
@@ -155,7 +157,9 @@ export const nativeIngressJa = {
   resultBoundary:
     'Router の受け付けは引き継ぎのみを示します。業務の実行と結果は、元の OpenAgents スレッドで確認してください。',
   authority:
-    '管理されたサービス経路で正確なソースと閲覧対象を登録してください。認証情報の参照だけではアクセス権は付与されません。',
+    'このアカウントには、このソースを閲覧する権限がありません。管理者にソース接続と閲覧権限の設定を依頼してください。',
+  upstreamHelp:
+    '既存の WeChat サービスでログインを確認するか、同期の完了をお待ちください。',
   sessions:
     'このソースは既存の Router と元の OpenAgents スレッドを使います。Pipeline のチャットセッションは作成しません。',
 };

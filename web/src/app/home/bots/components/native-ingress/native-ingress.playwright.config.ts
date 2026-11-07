@@ -12,7 +12,8 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: 'node src/app/home/bots/components/native-ingress/native-ingress.vite.mjs',
+    command:
+      'node src/app/home/bots/components/native-ingress/native-ingress.vite.mjs',
     cwd: process.cwd(),
     url: 'http://127.0.0.1:4173',
     reuseExistingServer: false,

@@ -29,6 +29,7 @@ export interface NativeSnapshot {
   error_code?: string;
   counts?: NativeCounts;
   records: NativeRecord[];
+  recordsAvailable: boolean;
   has_more: boolean;
 }
 const states = new Set<NativeState>([
@@ -65,7 +66,12 @@ export function parseNativeIngress(value: unknown): NativeSnapshot {
     input && states.has(input.state as NativeState)
       ? (input.state as NativeState)
       : 'unknown';
-  const snapshot: NativeSnapshot = { state, records: [], has_more: false };
+  const snapshot: NativeSnapshot = {
+    state,
+    records: [],
+    recordsAvailable: false,
+    has_more: false,
+  };
   if (
     typeof input?.error_code === 'string' &&
     /^[A-Za-z0-9_.:-]{1,100}$/.test(input.error_code)
@@ -94,6 +100,7 @@ export function parseNativeIngress(value: unknown): NativeSnapshot {
     ) as unknown as NativeCounts;
   }
   if (Array.isArray(input.records)) {
+    snapshot.recordsAvailable = true;
     for (const candidate of input.records.slice(0, 25)) {
       const row = object(candidate);
       if (

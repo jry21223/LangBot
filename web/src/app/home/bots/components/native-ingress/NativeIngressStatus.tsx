@@ -38,6 +38,11 @@ export default function NativeIngressStatus({
             {t('nativeIngress.authority')}
           </p>
         )}
+        {status.state === 'awaiting_upstream' && (
+          <p className="text-sm text-muted-foreground">
+            {t('nativeIngress.upstreamHelp')}
+          </p>
+        )}
         {status.counts && (
           <dl className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
             {(
@@ -52,7 +57,7 @@ export default function NativeIngressStatus({
             ))}
           </dl>
         )}
-        {showRecords && (
+        {showRecords && status.recordsAvailable && (
           <div className="space-y-2">
             {status.records.length === 0 ? (
               <p className="text-sm text-muted-foreground">
