@@ -325,6 +325,10 @@ class BotService:
         if bot is None:
             raise Exception('Bot not found')
 
+        from ....platform.native_ui import is_native_adapter
+        if is_native_adapter(self.ap,bot['adapter']):
+            raise ValueError('native_ingress_debug_unavailable')
+
         try:
             event = self._build_dry_run_event(event_type, event_data, context)
             bindings = (
@@ -681,11 +685,14 @@ class BotService:
             adapter_runtime_values['webhook_full_url'] = None
             adapter_runtime_values['extra_webhook_full_url'] = None
 
+        from ....platform.native_ui import is_native_adapter,native_ui_status
+        if is_native_adapter(self.ap,persistence_bot['adapter']):
+            adapter_runtime_values['native_ingress']=await native_ui_status(self.ap,context,persistence_bot,runtime_bot)
         persistence_bot['adapter_runtime_values'] = adapter_runtime_values
 
         return persistence_bot
 
-    def _validate_native_config_before_write(self,adapter_name,config):
+    def _validate_native_config_before_write(self,adapter_name,config,*,enable=None):
         adapter_name=canonical_adapter_name(adapter_name)
         registry=getattr(getattr(self.ap,'platform_mgr',None),'adapter_dict',{})
         if not isinstance(registry,dict):
@@ -696,6 +703,10 @@ class BotService:
             if adapter_name in {'agent-wechat','wecom-archive'}:
                 raise ValueError('native_adapter_not_available')
             return
+        if enable is not None and type(enable) is not bool:
+            raise ValueError('native_enable_invalid')
+        if config=={} and enable is False:
+            return
         validator=getattr(adapter_type,'native_validate_config',None)
         if not callable(validator):
             raise ValueError('native_config_validator_required')
@@ -705,11 +716,19 @@ class BotService:
             raise ValueError('native_config_invalid')
         validator(config)
 
+    def _reject_native_local_routing(self,adapter_name,data):
+        from ....platform.native_ui import is_native_adapter
+        if is_native_adapter(self.ap,canonical_adapter_name(adapter_name)):
+            if data.get('event_bindings') or data.get('plugin_processors'):
+                raise ValueError('native_ingress_routes_managed_externally')
+
     def _redact_invalid_native_configuration(self,bot):
         if bot.get('adapter') not in {'agent-wechat','wecom-archive'}:
             return
+        if bot.get('enable') is False and bot.get('adapter_config')=={}:
+            bot['native_configuration_incomplete']=True
         try:
-            self._validate_native_config_before_write(bot['adapter'],bot.get('adapter_config'))
+            self._validate_native_config_before_write(bot['adapter'],bot.get('adapter_config'),enable=bot.get('enable'))
         except ValueError:
             # Never echo old out-of-schema credentials, even to resource.manage.
             # This is read-only redaction, not an implicit database cleanup.
@@ -729,7 +748,9 @@ class BotService:
 
         # TODO: 检查配置信息格式
         bot_data = await self._prepare_bot_data(context, bot_data, include_uuid=True)
-        self._validate_native_config_before_write(bot_data.get('adapter',''),bot_data.get('adapter_config'))
+        self._validate_native_config_before_write(bot_data.get('adapter',''),bot_data.get('adapter_config'),
+                                                  enable=bot_data.get('enable',False))
+        self._reject_native_local_routing(bot_data.get('adapter',''),bot_data)
         bot_data['uuid'] = str(uuid.uuid4())
         bot_data['workspace_uuid'] = workspace_uuid
         bot_data.setdefault('event_bindings', [])
@@ -755,6 +776,8 @@ class BotService:
         existing=await self.get_bot(context,bot_uuid,include_secret=True)
         if existing is None:
             raise WorkspaceNotFoundError('Bot not found')
+        if existing.get('native_configuration_invalid') and 'adapter_config' not in update_data:
+            raise ValueError('native_configuration_invalid')
         # Bot update fields merge with the persistent entity. adapter_config,
         # when supplied, is an explicit complete replacement as in the existing
         # API; silently merging old secret keys would make them unremovable.
@@ -770,7 +793,8 @@ class BotService:
                 or callable(getattr(previous_type,'native_source_binding',None)))
             if 'adapter_config' not in update_data and native_switch:
                 raise ValueError('native_adapter_switch_requires_explicit_config')
-        self._validate_native_config_before_write(target_adapter,target_config)
+        self._validate_native_config_before_write(target_adapter,target_config,enable=update_data.get('enable',existing.get('enable')))
+        self._reject_native_local_routing(target_adapter,update_data)
 
         observed_adapter=existing.get('adapter','')
         aliases={observed_adapter}
@@ -781,10 +805,14 @@ class BotService:
             aliases.add(observed_adapter[:-5]+'-eba')
         if observed_adapter=='onebot-v11':
             aliases.update({'aiocqhttp-omni','aiocqhttp-eba'})
+        conditions=[persistence_bot.Bot.uuid==bot_uuid,persistence_bot.Bot.adapter.in_(aliases)]
+        registry=getattr(getattr(self.ap,'platform_mgr',None),'adapter_dict',{})
+        target_type=registry.get(canonical_adapter_name(target_adapter)) if isinstance(registry,dict) else None
+        if callable(getattr(target_type,'native_source_binding',None)) and type(existing.get('enable')) is bool:
+            conditions.append(persistence_bot.Bot.enable==existing['enable'])
         result = await self.ap.persistence_mgr.execute_async(
             scope_statement(
-                sqlalchemy.update(persistence_bot.Bot).values(update_data).where(
-                    persistence_bot.Bot.uuid == bot_uuid,persistence_bot.Bot.adapter.in_(aliases)),
+                sqlalchemy.update(persistence_bot.Bot).values(update_data).where(*conditions),
                 persistence_bot.Bot,
                 workspace_uuid,
             )

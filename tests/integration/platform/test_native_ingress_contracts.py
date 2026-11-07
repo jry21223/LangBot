@@ -12,7 +12,7 @@ from langbot.pkg.entity.persistence.base import Base
 from langbot.pkg.entity.persistence.bot import Bot
 from langbot.pkg.entity.persistence.apikey import ApiKey
 from langbot.pkg.entity.persistence.user import User
-from langbot.pkg.entity.persistence.workspace import Workspace
+from langbot.pkg.entity.persistence.workspace import Workspace,WorkspaceMembership
 from langbot.pkg.entity.persistence.native_ingress import NATIVE_TABLES
 from langbot.pkg.persistence.databases.sqlite import SQLiteDatabaseManager
 from langbot.pkg.persistence.mgr import PersistenceManager
@@ -30,7 +30,7 @@ async def manager(tmp_path):
     manager.db = SQLiteDatabaseManager(ap)
     await manager.db.initialize()
     async with manager.get_db_engine().begin() as conn:
-        await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=[User.__table__, Workspace.__table__, Bot.__table__, ApiKey.__table__, *NATIVE_TABLES]))
+        await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=[User.__table__, Workspace.__table__, WorkspaceMembership.__table__, Bot.__table__, ApiKey.__table__, *NATIVE_TABLES]))
         for workspace in ['workspace-a', 'workspace-b']:
             await conn.execute(sa.insert(Workspace).values(uuid=workspace, instance_uuid='test-'+workspace, name=workspace, slug=workspace))
             await conn.execute(sa.insert(Bot).values(uuid='bot-'+workspace, workspace_uuid=workspace, name='test', description='', adapter='test', adapter_config={}, enable=False))
@@ -318,9 +318,11 @@ async def test_source_factory_and_transaction_fence_block_revoke_after_preflight
     from langbot.pkg.platform.native_access import NativeAuthorization, register_native_access
     ap = SimpleNamespace(persistence_mgr=manager)
     ingress = store(manager)
-    await register_native_access(ap,context(),'bot-workspace-a',ingress.binding,source_enabled=True)
+    expected=authority_expectation(ingress.binding)
+    await register_native_access(ap,context(),'bot-workspace-a',ingress.binding,source_enabled=True,source_authority=expected)
     async def facts():
-        return dict(source='test-source',account='account-a',scope='chat-a',revision='grant-v1')
+        return dict(source='test-source',account='account-a',scope='chat-a',revision='grant-v1',
+                    authority_proof={'binding':expected['binding']})
     authorize = await NativeAuthorization(ap).source_factory(context(),'bot-workspace-a',ingress.binding,
                                                             SimpleNamespace(native_connection_facts=facts,native_authority_kind="account-session"))
     await authorize()
@@ -493,9 +495,9 @@ async def test_registered_original_reader_checks_latest_revision_and_recall_befo
     await ingress.accept_page(SourcePage('10','11',(event(),)),authorize=allowed)
     class Adapter:
         calls=0
-        async def native_original(self,ref,version):
+        async def native_authority(self,ref,version):
             self.calls+=1
-            return dict(reference=ref,version=version,text='你好\nsource original')
+            return dict(reference=ref,version=version,available=True,recalled=False)
     adapter=Adapter()
     runtime=SimpleNamespace(native_ingress_store=ingress,adapter=adapter,workspace_uuid='workspace-a',
         bot_entity=SimpleNamespace(uuid='bot-workspace-a'),assert_execution_active=allowed,native_source_authorize=allowed)
@@ -505,12 +507,12 @@ async def test_registered_original_reader_checks_latest_revision_and_recall_befo
     await register_native_access(ap,context(),'bot-workspace-a',ingress.binding,
         receiver_id='unique-host',receiver_api_key_uuid='dedicated-key',source_enabled=True,receiver_enabled=True)
     receiver=context(principal_type='api_key',key='dedicated-key',permissions=[])
-    result=await read_native_original(ap,receiver,'bot-workspace-a','original','source:message/native-1/v1','v1')
-    assert result['text']=='你好\nsource original' and adapter.calls==1
+    result=await read_native_original(ap,receiver,'bot-workspace-a','authority','source:message/native-1/v1','v1')
+    assert result['original']['available'] is True and adapter.calls==1
     recalled=router_event(version='v2',kind='recalled',eligible=False)
     await ingress.accept_page(SourcePage('11','12',(recalled,)),authorize=allowed)
     with pytest.raises(PermissionError,match='changed_or_recalled'):
-        await read_native_original(ap,receiver,'bot-workspace-a','original','source:message/native-1/v1','v1')
+        await read_native_original(ap,receiver,'bot-workspace-a','authority','source:message/native-1/v1','v1')
     assert adapter.calls==1
 
 
@@ -521,7 +523,8 @@ async def test_client_reference_is_exact_and_never_allows_arbitrary_files_or_dis
     from langbot.pkg.platform.native_clients import NativeClientRegistry
     binding=store(manager).binding
     ap=SimpleNamespace(persistence_mgr=manager)
-    await register_native_access(ap,context(),'bot-workspace-a',binding,source_enabled=True)
+    await register_native_access(ap,context(),'bot-workspace-a',binding,source_enabled=True,
+                                 source_authority=authority_expectation(binding))
     secret=tmp_path/'wx-read'
     secret.write_text('synthetic-test-only-value')
     secret.chmod(0o400)
@@ -557,7 +560,8 @@ async def test_default_registry_does_not_move_account_wide_wx_credentials_into_l
     from langbot.pkg.platform.native_clients import NativeClientRegistry
     binding=store(manager).binding
     ap=SimpleNamespace(persistence_mgr=manager)
-    await register_native_access(ap,context(),'bot-workspace-a',binding,source_enabled=True)
+    await register_native_access(ap,context(),'bot-workspace-a',binding,source_enabled=True,
+                                 source_authority=authority_expectation(binding))
     entry=dict(credential_ref='unscoped-wx',enabled=True,workspace_uuid='workspace-a',bot_uuid='bot-workspace-a',
                binding_sha256=store(manager).binding_hash,provider='agent-wechat-v1',
                endpoint='https://fixture.invalid/v1',secret_file='does-not-exist')
@@ -740,3 +744,20 @@ async def test_exact_owner_frame_replay_is_idempotent_but_eid_cannot_change_sequ
     with pytest.raises(ValueError,match='identity_conflict'):
         await ingress.accept_page(SourcePage('11','12',(owner_event('native-2',10,'owner-a'),)),authorize=allowed)
     assert await ingress.checkpoint()=='11'
+
+
+@pytest.mark.asyncio
+async def test_generic_source_cannot_claim_owner_event_id_without_explicit_owner_domain(manager):
+    ingress=store(manager)
+    await ingress.initialize('10')
+    value=router_event()
+    value.payload['owner_event_id']='owner-eid-without-sequence'
+    with pytest.raises(ValueError,match='owner_sequence_domain_required'):
+        await ingress.accept_page(SourcePage('10','11',(value,)),authorize=allowed)
+    assert await ingress.checkpoint()=='10'
+
+
+def authority_expectation(binding):
+    return dict(kind='wecom-source-binding-v1',binding=dict(source=binding.source,scope=binding.scope,
+        principal='source-metadata-reader',workspace='approved-source-profile',revision=binding.revision,
+        corp_id=binding.account,origin='owner_source_binding'))

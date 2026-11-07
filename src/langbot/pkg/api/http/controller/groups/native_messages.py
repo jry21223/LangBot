@@ -3,6 +3,7 @@ import quart
 
 _MESSAGES = {
     'en_US': {
+        'routing_external': 'Native source events are dispatched only by the existing Router',
         'operation_unknown': 'Native source operation is not available',
         'original_unavailable': 'The current original is not available',
         'feed_conflict': 'Invalid cursor or pending acknowledgement',
@@ -11,6 +12,7 @@ _MESSAGES = {
         'registration_invalid': 'Only registration settings are accepted',
     },
     'zh_Hans': {
+        'routing_external': '原生来源仅由既有 Router 派发，不使用普通消息调试',
         'operation_unknown': '此来源操作不可用',
         'original_unavailable': '当前版本的原件不可用',
         'feed_conflict': '游标无效，或上一页尚未确认',

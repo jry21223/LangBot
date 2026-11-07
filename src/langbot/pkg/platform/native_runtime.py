@@ -78,7 +78,8 @@ async def attach_native_runtime(runtime):
 
     async def authorize():
         await runtime.assert_execution_active()
-        await authorize_source()
+        facts=await authorize_source()
+        runtime.native_source_facts=facts
 
     await authorize()
     validator = getattr(runtime.adapter,'native_validate_change',None)

@@ -48,7 +48,7 @@ class NativeIngressRouterGroup(group.RouterGroup):
             # The service additionally requires ACCOUNT and resource.manage;
             # support/global keys cannot register source audiences.
             body = await quart.request.get_json()
-            allowed = {'receiver_id','receiver_api_key_uuid','source_enabled','receiver_enabled','expected_revision'}
+            allowed = {'receiver_id','receiver_api_key_uuid','source_enabled','receiver_enabled','expected_revision','source_authority','ui_observer_accounts'}
             if not isinstance(body,dict) or not set(body) <= allowed:
                 return self.http_status(400,'native_registration_invalid',message('registration_invalid'))
             result = await register_native_access(self.ap,request_context,bot_uuid,

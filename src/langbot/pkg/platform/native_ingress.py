@@ -159,12 +159,14 @@ class NativeIngressStore:
         envelopes = []
         for event in page.events:
             value = asdict(event)
+            if not isinstance(value['payload'],dict):
+                raise ValueError('native_metadata_invalid')
             owner_sequence=value.get('owner_frame_sequence')
             if self.owner_frame_sequences:
                 if type(owner_sequence) is not int or not 1<=owner_sequence<=2**63-1:
                     raise ValueError('native_owner_frame_sequence_required')
                 _identifier(value['payload'].get('owner_event_id'))
-            elif owner_sequence is not None:
+            elif owner_sequence is not None or 'owner_event_id' in value['payload']:
                 raise ValueError('native_owner_sequence_domain_required')
             for key in ('record', 'version', 'reference', 'kind'):
                 _identifier(value[key])
@@ -591,3 +593,43 @@ class NativeIngressStore:
             if latest.id!=row.id or latest.envelope['kind'] in {'recalled','recall'}:
                 raise NativeAccessDenied('native_original_changed_or_recalled')
             return row.envelope
+
+    async def ui_snapshot(self, *, limit=25, authorize: Authorize):
+        """Bounded durable metadata and producer receipts, never execution claims."""
+        if type(limit) is not int or not 1<=limit<=25:
+            raise ValueError('native_ui_limit_invalid')
+        await authorize()
+        async with self._own_transaction() as uow:
+            session=uow.session
+            await self._source(session)
+            normal=NativeEvent.envelope['kind'].as_string()!='unresolved'
+            async def count(model,*predicates):
+                return (await session.execute(sa.select(sa.func.count()).select_from(model).where(
+                    model.source_id==self.source_id,*predicates))).scalar_one()
+            source_events=await count(NativeEvent,normal)
+            accepted=await count(NativeEvent,normal,NativeEvent.receiver_receipt.is_not(None))
+            counts=dict(source_events=source_events,router_accepted=accepted,pending_host=source_events-accepted,
+                quarantines=await count(NativeGap,NativeGap.reason=='native_unresolved')+
+                    await count(NativeEvent,NativeEvent.envelope['kind'].as_string()=='unresolved'),
+                owner_gaps=await count(NativeGap,NativeGap.reason=='owner_source_gap'))
+            events=(await session.execute(sa.select(NativeEvent).where(NativeEvent.source_id==self.source_id)
+                .order_by(NativeEvent.position.desc()).limit(limit+1))).scalars().all()
+            gaps=(await session.execute(sa.select(NativeGap).where(NativeGap.source_id==self.source_id)
+                .order_by(NativeGap.position.desc()).limit(limit+1))).scalars().all()
+            rows=sorted([*events,*gaps],key=lambda row:row.position,reverse=True)
+            records=[]
+            for row in rows[:limit]:
+                if isinstance(row,NativeGap):
+                    records.append(dict(event_id=row.id,kind=row.reason,stage='quarantined'))
+                elif row.envelope['kind']=='unresolved':
+                    records.append(dict(event_id=row.id,kind='native_unresolved',stage='quarantined'))
+                else:
+                    value=dict(event_id=row.id,record=row.envelope['record'],version=row.envelope['version'],
+                        reference=row.envelope['reference'],kind=row.envelope['kind'],
+                        stage='router_accepted' if row.receiver_receipt is not None else 'source_accepted')
+                    if row.receiver_receipt is not None:
+                        value['receipt_id']=row.receiver_receipt['receipt_id']
+                    records.append(value)
+            result=dict(counts=counts,records=records,has_more=len(rows)>limit)
+        await authorize()
+        return result

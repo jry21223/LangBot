@@ -85,6 +85,8 @@ class NativeAccess(Base):
     binding_sha256 = sa.Column(sa.String(64), nullable=False)
     registration_request_id = sa.Column(sa.String(255), nullable=False)
     registered_by_account_uuid = sa.Column(sa.String(36), nullable=False)
+    source_authority = sa.Column(sa.JSON,nullable=True)
+    ui_observer_accounts = sa.Column(sa.JSON,nullable=False,default=list,server_default='[]')
     source_enabled = sa.Column(sa.Boolean, nullable=False, default=False, server_default=sa.false())
     source_revision = sa.Column(sa.Integer, nullable=False, default=1, server_default="1")
     receiver_id = sa.Column(sa.String(255), nullable=True)

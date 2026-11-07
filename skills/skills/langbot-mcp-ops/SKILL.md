@@ -243,10 +243,12 @@ receipts, not execution or delivery success. Do not enable a second consumer or
 forward source content through the ordinary LangBot pipeline in parallel.
 
 `read_native_source_original` delegates exact accepted source references to the
-current native adapter for authority, text originals, UTF-8 manifests and chunks.
+current native adapter for authority and descriptor metadata. Text originals,
+chunks and media are denied here and remain with the independently authorized
+OpenAgents source reader.
 Every read rechecks receiver registration, source authority, the latest durable
 record version and native recall state. It cannot read an arbitrary URL or
-unknown asset. Native media bytes use the protected HTTP source/media endpoint;
+unknown asset. Native media bytes are not exposed to the LangBot metadata receiver.
 MCP does not convert a filename or attachment metadata into parsed text.
 An empty Router poll (no items or gaps and no position advance) needs no ACK;
 a gap-only page does need its frozen page ACK with an empty receipt list.

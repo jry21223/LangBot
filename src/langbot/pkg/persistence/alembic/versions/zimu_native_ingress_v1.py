@@ -126,6 +126,8 @@ def upgrade():
         sa.Column('binding_sha256',sa.String(64),nullable=False),
         sa.Column('registration_request_id',sa.String(255),nullable=False),
         sa.Column('registered_by_account_uuid',sa.String(36),nullable=False),
+        sa.Column('source_authority',sa.JSON,nullable=True),
+        sa.Column('ui_observer_accounts',sa.JSON,nullable=False,server_default='[]'),
         sa.Column('source_enabled',sa.Boolean,nullable=False,server_default=sa.false()),
         sa.Column('source_revision',sa.Integer,nullable=False,server_default='1'),
         sa.Column('receiver_id',sa.String(255),nullable=True),
